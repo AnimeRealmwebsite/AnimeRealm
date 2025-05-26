@@ -1,0 +1,1047 @@
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="author" content="Manvith" />
+  <title>AnimeRealm - Watch Anime Online</title>
+  <link rel="icon" type="image/x-icon" href="favicon.ico">
+  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@vidstack/player@next/player.css" />
+  <style>
+    /* Updated modal styles for better centering and responsiveness */
+    #profileModal {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0, 0, 0, 0.6);
+      z-index: 1500;
+      align-items: center;
+      justify-content: center;
+      opacity: 0;
+      transition: opacity 0.3s ease;
+    }
+
+    #profileModal.show {
+      display: flex;
+      opacity: 1;
+    }
+
+    #profileModal .modal-content {
+      width: 350px;  
+      max-width: 90%;
+      max-height: 90vh;
+      position: relative;
+      background: var(--surface-color);
+      border-radius: 15px;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+      padding: 2rem;
+      animation: scaleUp 0.3s ease;
+      overflow-y: auto;
+    }
+
+    @keyframes scaleUp {
+      from { transform: scale(0.7); opacity: 0; }
+      to { transform: scale(1); opacity: 1; }
+    }
+
+    /* Update modal styles */
+    #authModal {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0, 0, 0, 0.6);
+      z-index: 1500;
+      align-items: center;
+      justify-content: center;
+      opacity: 0;
+      transition: opacity 0.3s ease;
+    }
+
+    #authModal.show {
+      display: flex;
+      opacity: 1;
+    }
+
+    #authModal .modal-content {
+      width: 400px;
+      max-width: 90%;
+      background: var(--surface-color);
+      border-radius: 15px;
+      position: relative;
+      padding: 2rem;
+    }
+
+    #authModal .close {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      font-size: 1.5rem;
+      cursor: pointer;
+      color: var(--text-secondary);
+    }
+    
+    .forgot-password {
+      color: var(--primary-color);
+      text-decoration: none;
+      font-size: 0.9rem;
+      margin-top: 0.5rem;
+      text-align: right;
+      display: block;
+      transition: color 0.3s ease;
+    }
+
+    .forgot-password:hover {
+      color: var(--secondary-color);
+      text-decoration: underline;
+    }
+    
+    /* Add styles for search features */
+    .search-bar {
+      position: relative;
+    }
+    
+    .search-bar input:focus {
+      outline: none;
+      border-color: var(--primary-color);
+    }
+    
+    .clear-search-btn:hover {
+      color: var(--primary-color);
+    }
+    
+    .error-state .fa-search {
+      font-size: 3rem;
+      color: var(--text-secondary);
+      margin-bottom: 1rem;
+    }
+    
+    /* Add comment section styles for video player modal */
+    .video-player-content {
+      display: flex;
+      flex-direction: column;
+      max-height: 90vh;
+      overflow-y: auto;
+    }
+    
+    #commentInput {
+      resize: none;
+    }
+    
+    .comment-action.liked {
+      color: var(--primary-color);
+    }
+    
+    .comment-action.liked i {
+      color: var(--primary-color);
+    }
+    /* Additional responsive fixes */
+    @media (max-width: 480px) {
+      .notification-dropdown {
+        width: 280px;
+        right: -70px;
+      }
+      
+      .dropdown-content {
+        right: -70px;
+      }
+      
+      .anime-details-header {
+        flex-direction: column;
+      }
+      
+      .anime-cover {
+        width: 100%;
+        max-width: 200px;
+        margin: 0 auto 1rem;
+      }
+      
+      .video-layout {
+        grid-template-columns: 1fr;
+        grid-template-rows: auto 1fr;
+      }
+      
+      .episode-sidebar {
+        order: 2;
+        max-height: 300px;
+      }
+      
+      .video-container {
+        order: 1;
+      }
+    }
+    
+    /* Add fixes for mobile responsiveness */
+    @media screen and (max-width: 768px) {
+      header {
+        padding: 0.5rem 0;
+      }
+      
+      nav {
+        flex-direction: column;
+        padding: 0 1rem;
+        gap: 0.5rem;
+      }
+      
+      .logo {
+        margin-bottom: 5px;
+      }
+      
+      .nav-links {
+        width: 100%;
+        overflow-x: auto;
+        justify-content: start;
+        padding-bottom: 5px;
+        gap: 1rem;
+      }
+      
+      .nav-links::-webkit-scrollbar {
+        display: none;
+      }
+      
+      .search-bar {
+        width: 100%;
+      }
+      
+      .hero-slider {
+        height: 300px;
+        margin-top: 120px;
+      }
+      
+      .slide-content h2 {
+        font-size: 1.8rem;
+      }
+      
+      .slide-content .description {
+        font-size: 0.9rem;
+        -webkit-line-clamp: 2;
+      }
+      
+      .slide-buttons {
+        flex-direction: row;
+      }
+      
+      .slide-buttons button {
+        padding: 0.5rem 1rem;
+        font-size: 0.9rem;
+      }
+      
+      .anime-details-modal .anime-actions {
+        flex-wrap: wrap;
+      }
+      
+      #profileModal .modal-content,
+      #authModal .modal-content,
+      #settingsModal .modal-content {
+        width: 90%;
+        max-height: 80vh;
+        padding: 1rem;
+      }
+      
+      /* Fix overlapping elements in mobile view */
+      .notification-dropdown,
+      .dropdown-content {
+        right: -100%;
+        width: 280px;
+      }
+      
+      /* Ensure chat doesn't block content */
+      .chat-container {
+        max-width: 300px;
+        right: 5px;
+      }
+      
+      .chat-container.minimized {
+        max-width: 300px;
+      }
+    }
+    
+    /* Fix modal content overflow */
+    .modal-content {
+      overflow-y: auto;
+      max-height: 90vh;
+    }
+    
+    /* Fix profile and auth modal display issues */
+    #authModal.show,
+    #profileModal.show,
+    #settingsModal.show {
+      display: flex !important;
+    }
+    
+    /* Error prevention */
+    img {
+      object-fit: cover;
+    }
+    
+    img.profile-icon,
+    img.user-avatar {
+      object-fit: cover;
+    }
+    
+    img.avatar-large {
+      object-fit: cover;
+      width: 120px;
+      height: 120px;
+    }
+    
+    /* Fix for video display issues */
+    .video-container {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      min-height: 450px;
+      background: #000;
+      border-radius: 10px;
+      overflow: hidden;
+    }
+    
+    #artplayer-container {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: #000;
+      display: block;
+    }
+    
+    .art-video-player {
+      --art-theme: var(--primary-color) !important;
+    }
+    
+    .art-video-player .art-controls {
+      opacity: 1 !important;
+      visibility: visible !important;
+    }
+    
+    /* Episode list improvements */
+    .episode-item {
+      cursor: pointer !important;
+      transition: background-color 0.2s ease !important;
+    }
+    
+    .episode-item:hover {
+      background-color: rgba(var(--primary-color-rgb), 0.2) !important;
+    }
+    
+    .episode-item.active {
+      background-color: var(--primary-color) !important;
+      color: white !important;
+    }
+    
+    /* Add loading spinner animation */
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+    
+    .loading-message i {
+      animation: spin 1s linear infinite;
+    }
+  </style>
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+</head>
+<body>
+  <!-- Auth Modal -->
+  <div id="authModal" class="modal">
+    <div class="modal-content">
+      <span class="close">&times;</span>
+      <div class="auth-tabs">
+        <button class="tab-btn active" data-tab="signin">Sign In</button>
+        <button class="tab-btn" data-tab="signup">Sign Up</button>
+      </div>
+      
+      <div id="signin" class="tab-content active">
+        <h2>Sign In</h2>
+        <form id="signinForm">
+          <div class="input-group">
+            <input type="email" name="email" placeholder="Email" required>
+          </div>
+          <div class="input-group">
+            <input type="password" name="password" id="signinPassword" placeholder="Password" required>
+            <button type="button" class="password-toggle" onclick="togglePassword('signinPassword', this)">
+              <i class="fas fa-eye"></i>
+            </button>
+          </div>
+          <button type="submit" class="auth-btn">Sign In</button>
+          <a href="#" id="forgotPassword" class="forgot-password">Forgot Password?</a>
+        </form>
+        <button id="googleSignIn" class="google-btn">
+          <i class="fab fa-google"></i> Continue with Google
+        </button>
+      </div>
+      
+      <div id="signup" class="tab-content">
+        <h2>Sign Up</h2>
+        <form id="signupForm">
+          <div class="input-group">
+            <input type="email" name="email" placeholder="Email" required>
+          </div>
+          <div class="input-group">
+            <input type="password" name="password" id="signupPassword" placeholder="Password" required>
+            <button type="button" class="password-toggle" onclick="togglePassword('signupPassword', this)">
+              <i class="fas fa-eye"></i>
+            </button>
+          </div>
+          <button type="submit" class="auth-btn">Sign Up</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <div id="profileModal" class="modal">
+    <div class="modal-content">
+      <span class="close">&times;</span>
+      <div class="profile-container">
+        <div class="profile-header">
+          <div class="avatar-container">
+            <div class="avatar-wrapper">
+              <img id="avatarPreview" class="avatar-large" src="" alt="Profile Avatar">
+              <div class="avatar-overlay">
+                <button id="uploadAvatar" class="avatar-action">
+                  <i class="fas fa-upload"></i>
+                </button>
+                <button id="generateAvatar" class="avatar-action">
+                  <i class="fas fa-random"></i>
+                </button>
+                <input type="file" id="avatarInput" class="avatar-input" accept="image/*">
+              </div>
+            </div>
+          </div>
+        </div>
+        
+        <form id="profileForm" class="profile-form">
+          <div class="form-grid">
+            <div class="form-section">
+              <div class="form-group">
+                <label for="usernameInput">Username</label>
+                <div class="input-wrapper">
+                  <i class="fas fa-user"></i>
+                  <input type="text" id="usernameInput" placeholder="Choose a unique username" required>
+                </div>
+              </div>
+
+              <div class="form-group">
+                <label for="genderSelect">Gender</label>
+                <div class="input-wrapper">
+                  <i class="fas fa-venus-mars"></i>
+                  <select id="genderSelect">
+                    <option value="">Select Gender</option>
+                    <option value="male">Male</option>
+                    <option value="female">Female</option>
+                    <option value="other">Other</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            <div class="form-section">
+              <div class="form-group">
+                <label for="bioInput">Bio</label>
+                <div class="input-wrapper">
+                  <i class="fas fa-paragraph"></i>
+                  <textarea id="bioInput" placeholder="Tell us about yourself..." rows="4"></textarea>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="profile-actions">
+            <button type="submit" class="save-profile-btn">
+              <i class="fas fa-save"></i> Save Profile
+            </button>
+            <button type="button" class="cancel-profile-btn">
+              <i class="fas fa-times"></i> Cancel
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <div id="settingsModal" class="modal">
+    <div class="modal-content">
+      <span class="close">&times;</span>
+      <div class="settings-header">
+        <h2>Settings</h2>
+      </div>
+      
+      <div class="settings-section">
+        <h3>Theme</h3>
+        <div class="theme-options">
+          <div class="theme-option active" data-theme="dark">
+            <i class="fas fa-moon"></i>
+            <p>Dark</p>
+          </div>
+          <div class="theme-option" data-theme="light">
+            <i class="fas fa-sun"></i>
+            <p>Light</p>
+          </div>
+          <div class="theme-option" data-theme="sepia">
+            <i class="fas fa-book"></i>
+            <p>Sepia</p>
+          </div>
+        </div>
+      </div>
+      
+      <div class="settings-section">
+        <h3>Language</h3>
+        <div class="language-options">
+          <div class="language-option active" data-lang="en">
+            <p>English</p>
+          </div>
+          <div class="language-option" data-lang="es">
+            <p>Spanish</p>
+          </div>
+          <div class="language-option" data-lang="fr">
+            <p>French</p>
+          </div>
+          <div class="language-option" data-lang="ja">
+            <p>Japanese</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="settings-section">
+        <h3>Notifications</h3>
+        <div class="notification-toggle">
+          <span>New Episode Alerts</span>
+          <label class="toggle-switch">
+            <input type="checkbox" id="episodeNotifications" checked>
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+        <div class="notification-toggle">
+          <span>Community Messages</span>
+          <label class="toggle-switch">
+            <input type="checkbox" id="chatNotifications">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+      </div>
+
+      <!-- Account settings moved to the bottom -->
+      <div class="settings-section account-settings">
+        <h3>Account Security</h3>
+        <div class="account-actions">
+          <div class="setting-option">
+            <h4>Change Password</h4>
+            <form id="passwordChangeForm" class="settings-form">
+              <div class="input-group">
+                <input type="password" id="currentPassword" placeholder="Current Password" required>
+              </div>
+              <div class="input-group">
+                <input type="password" id="newPassword" placeholder="New Password" required>
+              </div>
+              <div class="input-group">
+                <input type="password" id="confirmPassword" placeholder="Confirm New Password" required>
+              </div>
+              <button type="submit" class="settings-btn">
+                <i class="fas fa-key"></i> Update Password
+              </button>
+            </form>
+          </div>
+
+          <div class="setting-option danger-zone">
+            <h4>Delete Account</h4>
+            <p class="warning-text">This action cannot be undone. All your data will be permanently deleted.</p>
+            <form id="deleteAccountForm" class="settings-form">
+              <div class="input-group">
+                <input type="password" id="deleteAccountPassword" placeholder="Enter Password to Confirm" required>
+              </div>
+              <button type="submit" class="delete-account-btn">
+                <i class="fas fa-trash"></i> Delete Account
+              </button>
+            </form>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <header>
+    <nav>
+      <div class="logo" onclick="returnToHome()" style="cursor: pointer;">
+        AnimeRealm
+      </div>
+      <div class="search-bar">
+        <input type="text" id="search" placeholder="Search anime...">
+        <button><i class="fas fa-search"></i></button>
+      </div>
+      <div class="nav-links">
+        <a href="#" class="active" onclick="filterAnimeByCategory('Home'); return false;">Home</a>
+        <a href="#" onclick="filterAnimeByCategory('Movies'); return false;">Movies</a>
+        <a href="#" onclick="filterAnimeByCategory('TV'); return false;">TV</a>
+        <a href="#" onclick="filterAnimeByCategory('Popular'); return false;">Popular</a>
+        <a href="#" onclick="filterAnimeByCategory('New'); return false;">New</a>
+        <div id="notificationButton" class="notification-button">
+          <i class="fas fa-bell"></i>
+          <span class="notification-badge" id="notificationBadge">0</span>
+          <div class="notification-dropdown" id="notificationDropdown">
+            <div class="notification-header">
+              <h3>Notifications</h3>
+              <button id="clearNotifications">Clear All</button>
+            </div>
+            <div class="notification-list" id="notificationList">
+              <div class="empty-notification">No new notifications</div>
+            </div>
+          </div>
+        </div>
+        <button id="authButton" class="auth-nav-btn">
+          <i class="fa-solid fa-user"></i> Sign In
+        </button>
+        <div class="profile-dropdown" id="profileDropdown" style="display: none;">
+          <img id="userAvatar" class="profile-icon" src="" alt="Profile">
+          <div class="dropdown-content">
+            <div class="dropdown-header">
+              <img id="dropdownAvatar" class="user-avatar" src="" alt="Profile">
+              <span class="user-display-name"></span>
+              <span id="userEmail"></span>
+            </div>
+            <a href="#" data-toggle="modal" data-target="#profileModal"><i class="fa-solid fa-user-pen"></i> Edit Profile</a>
+            <a href="#" class="watchlist-link"><i class="fa-solid fa-list-ul"></i> Watchlist</a>
+            <a href="#" id="openSettings"><i class="fa-solid fa-gear"></i> Settings</a>
+            <div class="dropdown-divider"></div>
+            <a href="#" onclick="signOut()"><i class="fa-solid fa-arrow-right-from-bracket"></i> Sign Out</a>
+          </div>
+        </div>
+      </div>
+    </nav>
+  </header>
+
+  <main>
+    <section class="hero-slider">
+      <div class="hero-slide">
+        <div class="slide-content">
+          <h2>Loading...</h2>
+          <p>Please wait while we fetch the latest anime...</p>
+          <div class="slide-buttons">
+            <button class="watch-now">Watch Now</button>
+            <button class="add-list"><i class="fas fa-plus"></i> Add to List</button>
+          </div>
+        </div>
+        <div class="slide-overlay"></div>
+        <div class="slide-bg"></div>
+      </div>
+    </section>
+
+    <section class="trending">
+      <h2 data-translate="trendingNow">🔥 Trending Now</h2>
+      <div class="anime-grid" id="trending-grid">
+        <!-- Anime cards will be inserted here -->
+      </div>
+    </section>
+
+    <section class="recently-updated">
+      <h2 data-translate="recentlyUpdated">📺 Recently Updated</h2>
+      <div class="anime-grid" id="recent-grid">
+        <!-- Anime cards will be inserted here -->
+      </div>
+    </section>
+    <section class="chat-container">
+      <div class="chat-header">
+        <h2>Community Chat</h2>
+        <div class="controls">
+          <div class="online-count">
+            <i class="fas fa-circle"></i>
+            <span id="onlineCount">0</span> online
+          </div>
+          <button id="minimizeChat" class="minimize-btn">
+            <i class="fas fa-minus"></i>
+          </button>
+        </div>
+      </div>
+      <div class="chat-messages" id="chatMessages">
+        <!-- Messages will be inserted here -->
+      </div>
+      <div id="chatLoginPrompt" class="chat-login-prompt">
+        Please sign in to participate in the chat
+      </div>
+      <div class="chat-input-container">
+        <input type="text" id="chatInput" placeholder="Type a message..." disabled>
+        <button id="sendMessage" disabled>
+          <i class="fas fa-paper-plane"></i>
+        </button>
+      </div>
+    </section>
+  </main>
+
+  <div id="videoPlayerModal" class="video-player-modal">
+    <div class="video-player-content">
+      <div class="video-header">
+        <h3 class="video-title">Episode Title</h3>
+        <button class="close-video"><i class="fas fa-times"></i></button>
+      </div>
+      <div class="video-layout">
+        <div class="episode-sidebar">
+          <div class="episode-list-container">
+            <h4>Episodes</h4>
+            <div id="episodeList" class="episode-list"></div>
+          </div>
+          <div class="anime-info-card">
+            <!-- Anime info will be inserted here -->
+          </div>
+        </div>
+        <div class="video-container">
+          <div id="artplayer-container" style="width: 100%; height: 100%; background: #000;"></div>
+        </div>
+      </div>
+      <div class="video-comments-section">
+        <h3>Comments</h3>
+        <div class="comment-form">
+          <textarea id="commentInput" placeholder="Add a comment..."></textarea>
+          <button id="postComment">Post</button>
+        </div>
+        <div id="commentsList" class="comments-list">
+          <!-- Comments will be loaded here -->
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <footer>
+    <div class="footer-content">
+      <div class="footer-section">
+        <h3>AnimeRealm</h3>
+        <p>Your gateway to the world of anime</p>
+      </div>
+      <div class="footer-section">
+        <h3>Quick Links</h3>
+        <a href="#" onclick="navigateSection('Home'); return false;">Home</a>
+        <a href="#" onclick="navigateSection('Movies'); return false;">Movies</a>
+        <a href="#" onclick="navigateSection('TV Series'); return false;">TV Series</a>
+        <a href="#" onclick="navigateSection('Popular'); return false;">Popular</a>
+        <a href="#" onclick="navigateSection('Recently Added'); return false;">New</a>
+      </div>
+      <div class="footer-section">
+        <h3>Connect</h3>
+        <div class="social-links">
+          <a href="https://discord.gg/be774snHsP"><i class="fab fa-discord"></i></a>
+        </div>
+      </div>
+    </div>
+    <div class="footer-bottom">
+      <p>&copy; 2025 AnimeRealm. All rights reserved.</p>
+    </div>
+  </footer>
+
+  <!-- IndexedDB and artplayer libraries -->
+  <script src="https://cdn.jsdelivr.net/npm/idb@7/build/umd.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+  <script src="https://cdn.jsdelivr.net/npm/artplayer/dist/artplayer.js"></script>
+  
+  <!-- Firebase SDK -->
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-storage-compat.js"></script>
+  <script src="firebaseConfig.js"></script>
+  <script src="auth.js"></script>
+  <script src="app.js"></script>
+  <script src="chat.js"></script>
+  <script src="profile.js"></script>
+  <script>
+    // Clear console at page load
+    console.clear();
+    
+    document.addEventListener('DOMContentLoaded', () => {
+      try {
+        // Clear console again when DOM is loaded
+        console.clear();
+        
+        const authModal = document.getElementById('authModal');
+        const authButton = document.getElementById('authButton');
+        const profileDropdown = document.getElementById('profileDropdown');
+        const tabBtns = document.querySelectorAll('.tab-btn');
+        const tabContents = document.querySelectorAll('.tab-content');
+        
+        // Setup tabs functionality
+        tabBtns.forEach(btn => {
+          btn.addEventListener('click', () => {
+            const tabId = btn.getAttribute('data-tab');
+            
+            // Remove active class from all buttons and contents
+            tabBtns.forEach(b => b.classList.remove('active'));
+            tabContents.forEach(c => c.classList.remove('active'));
+            
+            // Add active class to current button and content
+            btn.classList.add('active');
+            document.getElementById(tabId)?.classList.add('active');
+          });
+        });
+        
+        // Initialize video player close button functionality
+        const closeVideoBtn = document.querySelector('.close-video');
+        const videoPlayerModal = document.getElementById('videoPlayerModal');
+        
+        if (closeVideoBtn && videoPlayerModal) {
+          closeVideoBtn.addEventListener('click', () => {
+            videoPlayerModal.classList.remove('show');
+            
+            // IMPORTANT: Force stop the video playback by completely replacing the iframe
+            const container = document.getElementById('artplayer-container');
+            if (container) {
+              // Remove all content including iframe
+              container.innerHTML = '';
+              
+              // Replace with empty div to maintain structure
+              const placeholder = document.createElement('div');
+              placeholder.style.width = '100%';
+              placeholder.style.height = '100%';
+              placeholder.style.background = '#000';
+              container.appendChild(placeholder);
+            }
+            
+            if (window.artPlayerInstance) {
+              try {
+                window.artPlayerInstance.destroy();
+                window.artPlayerInstance = null;
+              } catch(err) {
+                console.warn("Error destroying player:", err);
+              }
+            }
+          });
+          
+          // Make outside click close video modal with the same cleanup
+          videoPlayerModal.addEventListener('click', (e) => {
+            if (e.target === videoPlayerModal) {
+              videoPlayerModal.classList.remove('show');
+              
+              // IMPORTANT: Force stop the video playback by completely replacing the iframe
+              const container = document.getElementById('artplayer-container');
+              if (container) {
+                // Remove all content including iframe
+                container.innerHTML = '';
+                
+                // Replace with empty div to maintain structure
+                const placeholder = document.createElement('div');
+                placeholder.style.width = '100%';
+                placeholder.style.height = '100%';
+                placeholder.style.background = '#000';
+                container.appendChild(placeholder);
+              }
+              
+              if (window.artPlayerInstance) {
+                try {
+                  window.artPlayerInstance.destroy();
+                  window.artPlayerInstance = null;
+                } catch(err) {
+                  console.warn("Error destroying player:", err);
+                }
+              }
+            }
+          });
+        }
+        
+        // Fix episode selection for episodes list
+        document.addEventListener('click', function(e) {
+          // Find closest episode-item parent
+          const episodeItem = e.target.closest('.episode-item');
+          if (episodeItem && episodeItem.dataset.episode) {
+            const episode = parseInt(episodeItem.dataset.episode);
+            const currentActiveEp = document.querySelector('.episode-item.active');
+            const currentEpNum = currentActiveEp ? parseInt(currentActiveEp.dataset.episode) : 1;
+            
+            // Only proceed if clicking a different episode
+            if (episode !== currentEpNum) {
+              // Remove active class from all episodes
+              document.querySelectorAll('.episode-item').forEach(item => {
+                item.classList.remove('active');
+              });
+              
+              // Add active class to clicked episode
+              episodeItem.classList.add('active');
+              
+              // Get anime data from current player
+              const videoTitle = document.querySelector('.video-title');
+              let animeTitle = '';
+              if (videoTitle) {
+                animeTitle = videoTitle.textContent.split(' - ')[0];
+              }
+              
+              // Check if we have a player instance
+              if (window.artPlayerInstance) {
+                try {
+                  window.artPlayerInstance.destroy();
+                } catch (err) {
+                  console.warn("Error destroying player:", err);
+                }
+              }
+              
+              // Get anime ID from URL or data attribute
+              const animeInfoCard = document.querySelector('.anime-info-card');
+              const animeId = animeInfoCard?.dataset?.animeId;
+              const animeImg = animeInfoCard?.querySelector('img')?.src;
+              const episodeCount = document.querySelectorAll('.episode-item').length || 12;
+              
+              // Initialize new episode
+              initializeVideoPlayer({
+                id: animeId || '1',
+                title: animeTitle || 'Anime Title',
+                episodes: episodeCount,
+                image: animeImg || ''
+              }, episode);
+            }
+          }
+        }, true);
+        
+        // Add close functionality for auth modal
+        const authModalCloseBtn = authModal?.querySelector('.close');
+        if (authModalCloseBtn) {
+          authModalCloseBtn.addEventListener('click', () => {
+            authModal.classList.remove('show');
+            setTimeout(() => {
+              authModal.style.display = 'none';
+            }, 300);
+          });
+        }
+        
+        // Close auth modal when clicking outside
+        if (authModal) {
+          authModal.addEventListener('click', (e) => {
+            if (e.target === authModal) {
+              authModal.classList.remove('show');
+              setTimeout(() => {
+                authModal.style.display = 'none';
+              }, 300);
+            }
+          });
+        }
+        
+        // Safely show auth modal
+        if (authButton) {
+          authButton.addEventListener('click', () => {
+            if (authModal) {
+              authModal.style.display = 'flex';
+              authModal.classList.add('show');
+            }
+          });
+        }
+        
+        // Add notification button functionality
+        const notificationBtn = document.getElementById('notificationButton');
+        const notificationDropdown = document.getElementById('notificationDropdown');
+        if (notificationBtn && notificationDropdown) {
+          notificationBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            notificationDropdown.classList.toggle('show');
+            if (typeof renderNotifications === 'function') {
+              renderNotifications();
+            }
+          });
+          
+          document.addEventListener('click', (e) => {
+            if (notificationBtn && !notificationBtn.contains(e.target)) {
+              notificationDropdown.classList.remove('show');
+            }
+          });
+        }
+        
+        // Clear all notifications button
+        const clearNotificationsBtn = document.getElementById('clearNotifications');
+        if (clearNotificationsBtn) {
+          clearNotificationsBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (typeof clearAllNotifications === 'function') {
+              clearAllNotifications();
+            }
+          });
+        }
+        
+        // Handle watchlist link
+        const watchlistLink = document.querySelector('.watchlist-link');
+        if (watchlistLink) {
+          watchlistLink.addEventListener('click', (e) => {
+            e.preventDefault();
+            if (typeof showWatchlist === 'function') {
+              showWatchlist();
+            } else {
+              console.error('showWatchlist function not found');
+              alert('Watchlist feature coming soon!');
+            }
+          });
+        }
+        
+      } catch (error) {
+        console.error('Error in DOMContentLoaded main handler:', error);
+      }
+    });
+  
+    function navigateSection(section) {
+      // First update the nav links active state
+      const navLinks = document.querySelectorAll('.nav-links a');
+      navLinks.forEach(link => {
+        link.classList.remove('active');
+        if (link.textContent === section) {
+          link.classList.add('active');
+        }
+      });
+
+      // Check for special sections
+      if (section === 'Watchlist') {
+        if (typeof showWatchlist === 'function') {
+          showWatchlist();
+        } else {
+          console.error('showWatchlist function not found');
+          alert('Watchlist feature coming soon!');
+          // Fallback to home
+          filterAnimeByCategory('Home');
+        }
+      } else {
+        // Filter content for standard sections
+        filterAnimeByCategory(section);
+      }
+
+      // Smooth scroll to trending section
+      const trendingSection = document.querySelector('.trending');
+      if (trendingSection) {
+        window.scrollTo({
+          top: trendingSection.offsetTop - 100,
+          behavior: 'smooth'
+        });
+      }
+    }
+  
+    // Define showWatchlist if it doesn't exist
+    if (typeof showWatchlist !== 'function') {
+      window.showWatchlist = function() {
+        const user = firebase.auth().currentUser;
+        if (!user) {
+          // Show auth modal if user is not signed in
+          const authModal = document.getElementById('authModal');
+          if (authModal) {
+            authModal.style.display = 'flex';
+            authModal.classList.add('show');
+          }
+          return;
+        }
+        
+        alert('Watchlist feature is coming soon!');
+        // For now, redirect to home
+        filterAnimeByCategory('Home');
+      };
+    }
+  </script>
+  <script>
+    function togglePassword(inputId, button) {
+      const input = document.getElementById(inputId);
+      const icon = button.querySelector('i');
+      
+      if (input.type === 'password') {
+        input.type = 'text';
+        icon.className = 'fas fa-eye-slash';
+      } else {
+        input.type = 'password';
+        icon.className = 'fas fa-eye';
+      }
+    }
+  </script>
+</body>
+</html>
