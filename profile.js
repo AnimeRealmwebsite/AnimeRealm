@@ -11,22 +11,29 @@ document.addEventListener('DOMContentLoaded', () => {
   const genderSelect = document.getElementById('genderSelect');
   const bioInput = document.getElementById('bioInput');
   const cancelProfileBtn = document.querySelector('.cancel-profile-btn');
-  let originalAvatar = null; // Store original avatar URL when modal opens
+  let originalAvatar = null;
+
+  // Listen for profile loaded events
+  window.addEventListener('profileLoaded', async (event) => {
+    if (event.detail?.user) {
+      await loadUserProfile();
+    }
+  });
 
   // Enhanced modal handling
   function showProfileModal() {
     profileModal.classList.add('show');
-    // Store original avatar when modal opens
-    const user = firebase.auth().currentUser;
+    const user = window.getCurrentUser();
     if (user) {
-      try {
-        const profileData = JSON.parse(localStorage.getItem(`profile_${user.uid}`) || '{}');
-        originalAvatar = profileData.avatar || null;
-      } catch (error) {
-        console.error('Error loading original avatar:', error);
-      }
+      loadUserProfile();
+    } else {
+      // If no current user, try to get from Supabase directly
+      window.getSupabaseUser().then(user => {
+        if (user) {
+          loadUserProfile();
+        }
+      });
     }
-    loadUserProfile();
   }
 
   function hideProfileModal() {
@@ -89,11 +96,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Add rate limiting functionality for avatar generation
   function checkGenerationLimit() {
-    const user = firebase.auth().currentUser;
+    const user = window.getCurrentUser();
     if (!user) return false;
 
     const today = new Date().toDateString();
-    const limitKey = `avatar_gen_limit_${user.uid}_${today}`;
+    const limitKey = `avatar_gen_limit_${user.id}_${today}`;
 
     let usage = null;
     try {
@@ -110,7 +117,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     if (usage.count >= 5) {
-      alert('Daily avatar generation limit reached (5/5). Please try again tomorrow.');
+      showToast('Daily avatar generation limit reached (5/5). Please try again tomorrow.', 'warning');
       return false;
     }
 
@@ -164,12 +171,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Rate-limited avatar generation with gender consideration
   async function generateNewAvatar() {
-    const user = firebase.auth().currentUser;
+    const user = window.getCurrentUser();
     if (!user) return;
     
     const selectedGender = genderSelect.value;
     if (!selectedGender) {
-      alert('Please select a gender before generating an avatar');
+      showToast('Please select a gender before generating an avatar', 'warning');
       return;
     }
 
@@ -180,56 +187,101 @@ document.addEventListener('DOMContentLoaded', () => {
       generateAvatarBtn.disabled = true;
       generateAvatarBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
 
-      // Fetch random anime character with retry logic
-      let character = null;
-      let attempts = 0;
-      while (!character && attempts < 3) {
-        character = await fetchRandomAnimeCharacter();
-        // Check if character gender matches selected gender (if available)
-        if (character && character.gender) {
-          const charGender = character.gender.toLowerCase();
-          if (selectedGender === 'male' && charGender !== 'male') {
-            character = null;
-          } else if (selectedGender === 'female' && charGender !== 'female') {
-            character = null;
-          }
-        }
-        attempts++;
-      }
-
-      if (!character) {
-        throw new Error('Failed to find matching character after 3 attempts');
-      }
-
-      // Use character image as avatar
-      const imageUrl = character.image.large;
+      // Use high-quality anime character API based on gender
+      let avatarUrl;
+      const seed = Math.random().toString(36).substring(7);
       
+      if (selectedGender === 'male') {
+        // Use ThisPersonDoesNotExist anime style for males
+        avatarUrl = `https://api.waifu.pics/sfw/waifu`;
+        
+        // Fallback to anime boy API if available
+        try {
+          const response = await fetch('https://api.jikan.moe/v4/characters', {
+            method: 'GET',
+            headers: {
+              'Accept': 'application/json'
+            }
+          });
+          
+          if (response.ok) {
+            const data = await response.json();
+            const maleCharacters = data.data?.filter(char => 
+              char.name && char.images?.jpg?.image_url
+            );
+            
+            if (maleCharacters && maleCharacters.length > 0) {
+              const randomChar = maleCharacters[Math.floor(Math.random() * maleCharacters.length)];
+              avatarUrl = randomChar.images.jpg.image_url;
+            }
+          }
+        } catch (apiError) {
+          console.warn('Jikan API error, using fallback:', apiError);
+          avatarUrl = `https://picsum.photos/400/400?random=${seed}`;
+        }
+      } else if (selectedGender === 'female') {
+        // Use waifu.pics API for high-quality anime girl images
+        try {
+          const response = await fetch('https://api.waifu.pics/sfw/waifu');
+          if (response.ok) {
+            const data = await response.json();
+            avatarUrl = data.url;
+          } else {
+            throw new Error('Waifu API failed');
+          }
+        } catch (apiError) {
+          console.warn('Waifu API error, using fallback:', apiError);
+          // Fallback to anime character generator
+          avatarUrl = `https://api.dicebear.com/7.x/anime/svg?seed=${seed}&gender=female`;
+        }
+      } else {
+        // For 'other' gender, use a neutral anime style
+        avatarUrl = `https://api.dicebear.com/7.x/anime/svg?seed=${seed}`;
+      }
+
       // Update preview
       if (avatarPreview) {
-        avatarPreview.src = imageUrl;
+        avatarPreview.src = avatarUrl;
         // Store as temporary until saved
-        window.tempGeneratedAvatar = imageUrl;
+        window.tempGeneratedAvatar = avatarUrl;
       }
 
-      // Add character name as suggested username if username field is empty
+      // Generate username suggestion based on gender and avatar
       const usernameInput = document.getElementById('usernameInput');
       if (usernameInput && (!usernameInput.value || usernameInput.value.trim() === '')) {
-        // Convert character name to valid username format
-        const suggestedUsername = character.name.full
-          .toLowerCase()
-          .replace(/[^a-z0-9]/g, '')
-          .slice(0, 20); // Limit length
-        usernameInput.value = suggestedUsername;
+        const genderPrefixes = {
+          male: ['anime_guy', 'otaku_boy', 'manga_hero', 'anime_kun'],
+          female: ['anime_girl', 'waifu', 'manga_chan', 'otaku_girl'],
+          other: ['anime_fan', 'manga_lover', 'otaku']
+        };
+        
+        const prefixes = genderPrefixes[selectedGender] || genderPrefixes.other;
+        const randomPrefix = prefixes[Math.floor(Math.random() * prefixes.length)];
+        const randomNumber = Math.floor(Math.random() * 9999);
+        
+        usernameInput.value = `${randomPrefix}_${randomNumber}`;
       }
 
     } catch (error) {
       console.error('Avatar generation error:', error);
-      // Fallback to original avatar generation if AniList fails
-      const fallbackUrl = `https://api.dicebear.com/7.x/avataaars/svg?seed=${user.uid}-${Date.now()}`;
+      // Enhanced fallback system
+      const fallbackSeed = user.id + '-' + Date.now();
+      let fallbackUrl;
+      
+      if (selectedGender === 'male') {
+        fallbackUrl = `https://api.dicebear.com/7.x/avataaars/svg?seed=${fallbackSeed}&gender=male`;
+      } else if (selectedGender === 'female') {
+        fallbackUrl = `https://api.dicebear.com/7.x/avataaars/svg?seed=${fallbackSeed}&gender=female`;
+      } else {
+        fallbackUrl = `https://api.dicebear.com/7.x/avataaars/svg?seed=${fallbackSeed}`;
+      }
+      
       if (avatarPreview) {
         avatarPreview.src = fallbackUrl;
         window.tempGeneratedAvatar = fallbackUrl;
       }
+      
+      showToast('Using fallback avatar generator', 'warning');
     } finally {
       generateAvatarBtn.disabled = false;
       generateAvatarBtn.innerHTML = '<i class="fas fa-random"></i>';
@@ -241,9 +293,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const file = event.target.files[0];
     if (!file) return;
 
-    const user = firebase.auth().currentUser;
+    const user = window.getCurrentUser();
     if (!user) {
-      alert('Please sign in first');
+      showToast('Please sign in first', 'warning');
       return;
     }
 
@@ -253,12 +305,12 @@ document.addEventListener('DOMContentLoaded', () => {
     const maxDimension = 1000; // Max 1000x1000 pixels
 
     if (!validTypes.includes(file.type)) {
-      alert('Please upload a JPEG, PNG, or WebP image.');
+      showToast('Please upload a JPEG, PNG, or WebP image.', 'warning');
       return;
     }
 
     if (file.size > maxSize) {
-      alert('Image must be smaller than 5MB.');
+      showToast('Image must be smaller than 5MB.', 'warning');
       return;
     }
 
@@ -283,7 +335,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     } catch (error) {
       console.error('Avatar upload error:', error);
-      alert('Failed to process image. Please try another image.');
+      showToast('Failed to process image. Please try another image.', 'error');
       
       // Revert to original avatar on error
       if (avatarPreview && originalAvatar) {
@@ -345,70 +397,87 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // Load user profile data from localStorage with error handling
-  function loadUserProfile() {
-    const user = firebase.auth().currentUser;
+  // Load user profile data from Supabase
+  async function loadUserProfile() {
+    const user = window.getCurrentUser();
     if (!user) {
-      console.error('No user logged in');
-      return;
+      // Try to get user from Supabase session
+      const supabaseUser = await window.getSupabaseUser();
+      if (!supabaseUser) {
+        console.error('No user logged in');
+        return;
+      }
     }
 
+    const currentUser = user || await window.getSupabaseUser();
+
     try {
-      // Get user data from localStorage
-      let userProfile = {};
-      try {
-        const profileData = localStorage.getItem(`profile_${user.uid}`);
-        if (profileData) {
-          userProfile = JSON.parse(profileData);
-        } else {
-          // Initialize with default data if no profile exists
-          userProfile = {
-            username: user.displayName || user.email.split('@')[0],
-            email: user.email,
-            gender: '',
-            bio: '',
-            createdAt: new Date().toISOString()
-          };
-          localStorage.setItem(`profile_${user.uid}`, JSON.stringify(userProfile));
+      // Get user data from Supabase with retry mechanism
+      let profileData = null;
+      let retryCount = 0;
+      const maxRetries = 3;
+      
+      while (retryCount < maxRetries && !profileData) {
+        try {
+          profileData = await window.loadUserProfile(currentUser.id);
+          if (profileData) break;
+        } catch (error) {
+          console.warn(`Profile load attempt ${retryCount + 1} failed:`, error);
         }
-      } catch (error) {
-        console.error('Error parsing user profile:', error);
-        userProfile = {};
+        retryCount++;
+        if (retryCount < maxRetries) {
+          await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
+        }
       }
       
-      // Update form fields safely
-      if (usernameInput) usernameInput.value = userProfile.username || '';
-      if (genderSelect) genderSelect.value = userProfile.gender || '';
-      if (bioInput) bioInput.value = userProfile.bio || '';
+      // Update form fields safely with fallback values
+      if (usernameInput) {
+        usernameInput.value = profileData?.username || currentUser.user_metadata?.username || currentUser.email.split('@')[0];
+      }
+      if (genderSelect) {
+        genderSelect.value = profileData?.gender || '';
+      }
+      if (bioInput) {
+        bioInput.value = profileData?.bio || '';
+      }
 
-      // Update avatar preview
-      if (userProfile.avatar && avatarPreview) {
-        avatarPreview.src = userProfile.avatar;
+      // Update avatar preview with fallback handling
+      const avatarUrl = profileData?.avatar_url || currentUser.user_metadata?.avatar_url || `https://api.dicebear.com/7.x/avataaars/svg?seed=${currentUser.id}`;
+      originalAvatar = avatarUrl;
+      
+      if (avatarPreview) {
+        avatarPreview.src = avatarUrl;
+        avatarPreview.onerror = function() {
+          this.onerror = null;
+          this.src = `https://api.dicebear.com/7.x/avataaars/svg?seed=${currentUser.id}`;
+        };
+        
         // Update all avatar instances
         document.querySelectorAll('.profile-icon, .user-avatar').forEach(el => {
-          if (el) el.src = userProfile.avatar;
+          if (el) {
+            el.src = avatarUrl;
+            el.onerror = function() {
+              this.onerror = null;
+              this.src = `https://api.dicebear.com/7.x/avataaars/svg?seed=${currentUser.id}`;
+            };
+          }
         });
-      } else if (avatarPreview) {
-        const defaultAvatarUrl = `https://api.dicebear.com/7.x/avataaars/svg?seed=${user.uid}`;
-        avatarPreview.src = defaultAvatarUrl;
-        
-        // Save this default avatar
-        userProfile.avatar = defaultAvatarUrl;
-        localStorage.setItem(`profile_${user.uid}`, JSON.stringify(userProfile));
       }
     } catch (error) {
       console.error('Error in loadUserProfile:', error);
+      // Show user-friendly error message
+      showToast('Failed to load profile data. Some information may be missing.', 'warning');
     }
   }
 
-  // Enhanced profile update handler with better error checking
+  // Enhanced profile update handler with Supabase integration
   async function handleProfileUpdate(e) {
     e.preventDefault();
     
     try {
-      const user = firebase.auth().currentUser;
+      const user = window.getCurrentUser();
       if (!user) {
-        alert('Please sign in first');
+        showToast('Please sign in first', 'warning');
         return;
       }
 
@@ -418,59 +487,42 @@ document.addEventListener('DOMContentLoaded', () => {
 
       // Input validation
       if (!username) {
-        alert('Username is required');
+        showToast('Username is required', 'warning');
         return;
       }
 
       if (username.length < 3 || username.length > 20) {
-        alert('Username must be between 3 and 20 characters');
+        showToast('Username must be between 3 and 20 characters', 'warning');
         return;
       }
 
       const usernameRegex = /^[a-zA-Z0-9_]+$/;
       if (!usernameRegex.test(username)) {
-        alert('Username can only contain letters, numbers, and underscores');
+        showToast('Username can only contain letters, numbers, and underscores', 'warning');
         return;
       }
 
       if (bio && bio.length > 200) {
-        alert('Bio must be 200 characters or less');
+        showToast('Bio must be 200 characters or less', 'warning');
         return;
       }
 
       // Show loading state
-      const saveButton = document.querySelector('.save-profile-btn');
-      if (saveButton) {
-        saveButton.disabled = true;
-        saveButton.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving...';
-      }
-      
-      // Get existing data
-      let existingData = {};
-      try {
-        const storedData = localStorage.getItem(`profile_${user.uid}`);
-        if (storedData) {
-          existingData = JSON.parse(storedData);
-        }
-      } catch (parseError) {
-        console.warn('Error parsing existing profile data, starting fresh', parseError);
-      }
+      showLoadingOverlay('Saving your profile...');
       
       // Use the temporary generated avatar if it exists, otherwise keep existing
-      const newAvatarUrl = window.tempGeneratedAvatar || existingData.avatar;
+      const newAvatarUrl = window.tempGeneratedAvatar || originalAvatar;
       
-      // Merge existing data with new data
-      const mergedData = { 
-        ...existingData, 
-        username, 
-        gender, 
-        bio, 
-        avatar: newAvatarUrl,
-        updatedAt: new Date().toISOString(),
-        email: user.email || existingData.email
+      // Update profile in Supabase
+      const updates = {
+        username,
+        gender,
+        bio,
+        avatar_url: newAvatarUrl,
+        updated_at: new Date().toISOString()
       };
       
-      localStorage.setItem(`profile_${user.uid}`, JSON.stringify(mergedData));
+      await window.updateUserProfile(user.id, updates);
 
       // Update all UI elements with the new data
       document.querySelectorAll('.user-display-name').forEach(el => {
@@ -487,16 +539,17 @@ document.addEventListener('DOMContentLoaded', () => {
       const profileModal = document.getElementById('profileModal');
       if (profileModal) profileModal.classList.remove('show');
       
-      alert('Profile updated successfully!');
+      // Show success feedback
+      showToast('Profile updated successfully!', 'success');
+      showAutoSaveIndicator();
+      
     } catch (error) {
       console.error('Profile update error:', error);
-      alert('Failed to update profile. Please try again.');
+      showToast('Failed to update profile. Please try again.', 'error');
     } finally {
-      const saveButton = document.querySelector('.save-profile-btn');
-      if (saveButton) {
-        saveButton.disabled = false;
-        saveButton.innerHTML = '<i class="fas fa-save"></i> Save Profile';
-      }
+      hideLoadingOverlay();
+      // Clear temporary avatar
+      window.tempGeneratedAvatar = null;
     }
   }
 
@@ -516,62 +569,136 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // Updated signOut function
-  window.signOut = function() {
-    firebase.auth().signOut().then(() => {
-      window.location.reload();
-    }).catch((error) => {
-      console.error('Sign out error', error);
-    });
-  };
-
-  // Initialize online users count functionality
+  // Initialize auto-save when profile modal opens
+  initializeAutoSave();
+  
+  // Add periodic profile refresh for better reliability
+  setInterval(async () => {
+    const user = window.getCurrentUser();
+    if (user && document.getElementById('profileModal').classList.contains('show')) {
+      try {
+        await loadUserProfile();
+      } catch (error) {
+        console.warn('Periodic profile refresh failed:', error);
+      }
+    }
+  }, 30000); // Refresh every 30 seconds if profile modal is open
+  
+  // Initialize online users count functionality for Supabase chat
   function initializeOnlineUsersCount() {
     const onlineCountElement = document.getElementById('onlineCount');
     if (!onlineCountElement) return;
 
-    const onlineUsersRef = firebase.database().ref('online_users');
-    
-    onlineUsersRef.on('value', (snapshot) => {
-      let count = 0;
-      const now = Date.now();
-      const fiveMinutesAgo = now - (5 * 60 * 1000);
-      
-      snapshot.forEach((childSnapshot) => {
-        const userData = childSnapshot.val();
-        if (userData.lastActive > fiveMinutesAgo) {
-          count++;
-        }
-      });
-      
-      onlineCountElement.textContent = count;
-    });
+    // Subscribe to online users changes
+    const subscription = window.supabase
+      .channel('online_users_count')
+      .on('postgres_changes', 
+        { event: '*', schema: 'public', table: 'online_users' },
+        () => updateOnlineCount()
+      )
+      .subscribe();
 
-    // Update current user's online status
-    const user = firebase.auth().currentUser;
-    if (user) {
-      const userStatusRef = onlineUsersRef.child(user.uid);
-      
-      // Update status on connection state change
-      firebase.database().ref('.info/connected').on('value', (snapshot) => {
-        if (snapshot.val() === true) {
-          userStatusRef.onDisconnect().remove();
-          userStatusRef.set({
-            uid: user.uid,
-            lastActive: firebase.database.ServerValue.TIMESTAMP,
-            status: 'online'
-          });
-        }
-      });
+    async function updateOnlineCount() {
+      try {
+        // Get users active in the last 5 minutes
+        const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+        
+        const { data, error } = await window.supabase
+          .from('online_users')
+          .select('user_id')
+          .gte('last_active', fiveMinutesAgo);
 
-      // Update lastActive periodically
-      setInterval(() => {
-        userStatusRef.update({
-          lastActive: firebase.database.ServerValue.TIMESTAMP
-        });
-      }, 30000);
+        if (error) throw error;
+
+        onlineCountElement.textContent = (data?.length || 0).toString();
+      } catch (error) {
+        console.error('Error updating online count:', error);
+        onlineCountElement.textContent = '0';
+      }
     }
+
+    updateOnlineCount();
+
+    // Update current user's online status using Supabase user data
+    const updatePresenceWithRetry = async () => {
+      const user = window.getCurrentUser() || await window.getSupabaseUser();
+      if (!user) return;
+      
+      try {
+        // Get profile data from Supabase with retry
+        let profileData = null;
+        try {
+          profileData = await window.loadUserProfile(user.id);
+        } catch (error) {
+          console.warn('Failed to load profile for presence update:', error);
+        }
+        
+        const username = profileData?.username || user.user_metadata?.username || user.email.split('@')[0];
+        const avatarUrl = profileData?.avatar_url || `https://api.dicebear.com/7.x/avataaars/svg?seed=${user.id}`;
+        
+        await window.supabase
+          .from('online_users')
+          .upsert({
+            user_id: user.id,
+            username: username,
+            avatar_url: avatarUrl,
+            last_active: new Date().toISOString()
+          });
+      } catch (error) {
+        console.error('Error updating presence:', error);
+      }
+    };
+
+    // Update presence with retry mechanism
+    const updatePresence = async () => {
+      try {
+        await updatePresenceWithRetry();
+      } catch (error) {
+        // Retry once after delay
+        setTimeout(updatePresenceWithRetry, 5000);
+      }
+    };
+
+    // Initial update
+    updatePresence();
+    
+    // Update every 30 seconds
+    setInterval(updatePresence, 30000);
   }
 
   initializeOnlineUsersCount();
 });
+
+// Auto-save profile changes as user types
+function initializeAutoSave() {
+  const profileInputs = document.querySelectorAll('#profileForm input, #profileForm select, #profileForm textarea');
+  let saveTimeout;
+  
+  profileInputs.forEach(input => {
+    input.addEventListener('input', () => {
+      clearTimeout(saveTimeout);
+      saveTimeout = setTimeout(async () => {
+        // Auto-save after 2 seconds of no typing
+        const user = window.getCurrentUser();
+        if (user) {
+          const profileData = {
+            username: document.getElementById('usernameInput')?.value?.trim() || '',
+            gender: document.getElementById('genderSelect')?.value || '',
+            bio: document.getElementById('bioInput')?.value?.trim() || '',
+            updated_at: new Date().toISOString()
+          };
+          
+          // Only save if there's actual content
+          if (profileData.username || profileData.bio) {
+            try {
+              await window.updateUserProfile(user.id, profileData);
+              showAutoSaveIndicator();
+            } catch (error) {
+              console.error('Auto-save error:', error);
+            }
+          }
+        }
+      }, 2000);
+    });
+  });
+}

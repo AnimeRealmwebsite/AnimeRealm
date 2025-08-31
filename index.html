@@ -1,13 +1,48 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no">
   <meta name="author" content="Manvith" />
   <title>AnimeRealm - Watch Anime Online</title>
   <link rel="icon" type="image/x-icon" href="favicon.ico">
+  
+  <!-- PWA Manifest -->
+  <link rel="manifest" href="manifest.json">
+  
+  <!-- PWA Meta Tags -->
+  <meta name="theme-color" content="#6C63FF">
+  <meta name="background-color" content="#1A1A1A">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="AnimeRealm">
+  <meta name="msapplication-TileColor" content="#6C63FF">
+  <meta name="msapplication-TileImage" content="https://api.dicebear.com/7.x/shapes/png?seed=animerealm&size=144">
+  
+  <!-- Apple Touch Icons -->
+  <link rel="apple-touch-icon" href="https://api.dicebear.com/7.x/shapes/png?seed=animerealm&size=180">
+  <link rel="apple-touch-icon" sizes="152x152" href="https://api.dicebear.com/7.x/shapes/png?seed=animerealm&size=152">
+  <link rel="apple-touch-icon" sizes="180x180" href="https://api.dicebear.com/7.x/shapes/png?seed=animerealm&size=180">
+  
+  <!-- Additional PWA meta tags for better mobile experience -->
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="format-detection" content="telephone=no">
+  
   <link rel="stylesheet" href="style.css">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@vidstack/player@next/player.css" />
+  
+  <!-- Add Supabase SDK -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
+  <!-- Add IndexedDB with defer -->
+  <script defer src="https://cdn.jsdelivr.net/npm/idb@7/build/umd.js"></script>
+
+  <!-- Load app configuration and core files -->
+  <script defer src="supabaseConfig.js"></script>
+  <script defer src="auth.js"></script>
+  <script defer src="app.js"></script>
+  <script defer src="chat.js"></script>
+  <script defer src="profile.js"></script>
+
   <style>
     /* Updated modal styles for better centering and responsiveness */
     #profileModal {
@@ -345,8 +380,281 @@
     .loading-message i {
       animation: spin 1s linear infinite;
     }
+    
+    /* Add loading overlay for better UX */
+    .loading-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0, 0, 0, 0.8);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 9999;
+      opacity: 0;
+      visibility: hidden;
+      transition: all 0.3s ease;
+    }
+    
+    .loading-overlay.show {
+      opacity: 1;
+      visibility: visible;
+    }
+    
+    .loading-content {
+      background: var(--surface-color);
+      padding: 2rem;
+      border-radius: 15px;
+      text-align: center;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+    }
+    
+    .loading-spinner {
+      width: 50px;
+      height: 50px;
+      border: 3px solid var(--border-color);
+      border-top: 3px solid var(--primary-color);
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+      margin: 0 auto 1rem;
+    }
+    
+    /* Enhanced toast notifications */
+    .toast-container {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      z-index: 10000;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    
+    .toast {
+      background: var(--surface-color);
+      color: var(--text-color);
+      padding: 1rem 1.5rem;
+      border-radius: 8px;
+      box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+      border-left: 4px solid var(--primary-color);
+      transform: translateX(100%);
+      opacity: 0;
+      transition: all 0.3s ease;
+      max-width: 300px;
+      word-wrap: break-word;
+    }
+    
+    .toast.show {
+      transform: translateX(0);
+      opacity: 1;
+    }
+    
+    .toast.success {
+      border-left-color: #4CAF50;
+    }
+    
+    .toast.error {
+      border-left-color: #F44336;
+    }
+    
+    .toast.warning {
+      border-left-color: #FF9800;
+    }
+    
+    .toast-close {
+      background: none;
+      border: none;
+      color: var(--text-secondary);
+      float: right;
+      margin-left: 10px;
+      cursor: pointer;
+    }
+    
+    /* Keyboard shortcuts helper */
+    .shortcuts-modal {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0, 0, 0, 0.8);
+      z-index: 2000;
+      align-items: center;
+      justify-content: center;
+    }
+    
+    .shortcuts-content {
+      background: var(--surface-color);
+      padding: 2rem;
+      border-radius: 15px;
+      max-width: 500px;
+      max-height: 80vh;
+      overflow-y: auto;
+    }
+    
+    .shortcut-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 0.5rem 0;
+      border-bottom: 1px solid var(--border-color);
+    }
+    
+    .shortcut-key {
+      background: var(--background-color);
+      padding: 0.2rem 0.5rem;
+      border-radius: 4px;
+      font-family: monospace;
+      font-size: 0.9rem;
+    }
+    
+    /* Enhanced scroll to top button */
+    .scroll-to-top {
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      width: 50px;
+      height: 50px;
+      background: var(--primary-color);
+      color: white;
+      border: none;
+      border-radius: 50%;
+      cursor: pointer;
+      opacity: 0;
+      visibility: hidden;
+      transition: all 0.3s ease;
+      z-index: 1000;
+      box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+    }
+    
+    .scroll-to-top.show {
+      opacity: 1;
+      visibility: visible;
+    }
+    
+    .scroll-to-top:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+    }
+    
+    /* Enhanced search with recent searches */
+    .search-history {
+      padding: 10px;
+      border-bottom: 1px solid var(--border-color);
+    }
+    
+    .search-history-title {
+      font-size: 0.8rem;
+      color: var(--text-secondary);
+      margin-bottom: 5px;
+    }
+    
+    .search-history-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 5px 10px;
+      cursor: pointer;
+      border-radius: 4px;
+      transition: background-color 0.2s ease;
+    }
+    
+    .search-history-item:hover {
+      background-color: rgba(var(--primary-color-rgb), 0.1);
+    }
+    
+    .search-history-clear {
+      background: none;
+      border: none;
+      color: var(--text-secondary);
+      cursor: pointer;
+      font-size: 0.8rem;
+    }
+    
+    /* Better mobile experience */
+    @media (max-width: 768px) {
+      .toast-container {
+        top: 10px;
+        right: 10px;
+        left: 10px;
+      }
+      
+      .toast {
+        max-width: none;
+      }
+      
+      .scroll-to-top {
+        bottom: 80px;
+        right: 15px;
+      }
+    }
+    
+    /* Enhanced focus states for accessibility */
+    .anime-card:focus,
+    .nav-links a:focus,
+    .auth-nav-btn:focus,
+    .profile-icon:focus {
+      outline: 2px solid var(--primary-color);
+      outline-offset: 2px;
+    }
+    
+    /* Smooth animations for better UX */
+    .anime-card {
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    
+    .anime-card:hover {
+      transform: translateY(-8px) scale(1.02);
+      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.15);
+    }
+    
+    /* Enhanced loading states */
+    .skeleton-loading {
+      background: linear-gradient(90deg, var(--surface-color) 25%, rgba(255,255,255,0.1) 50%, var(--surface-color) 75%);
+      background-size: 200% 100%;
+      animation: skeleton-shimmer 1.5s infinite;
+    }
+    
+    @keyframes skeleton-shimmer {
+      0% { background-position: -200% 0; }
+      100% { background-position: 200% 0; }
+    }
+    
+    /* Auto-save indicator */
+    .auto-save-indicator {
+      position: fixed;
+      top: 50%;
+      right: 20px;
+      transform: translateY(-50%);
+      background: var(--surface-color);
+      padding: 0.5rem 1rem;
+      border-radius: 20px;
+      box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+      opacity: 0;
+      transition: all 0.3s ease;
+      z-index: 1000;
+    }
+    
+    .auto-save-indicator.show {
+      opacity: 1;
+    }
+    
+    /* Enhanced button hover effects */
+    button:not(:disabled) {
+      transition: all 0.2s ease;
+    }
+    
+    button:not(:disabled):hover {
+      transform: translateY(-1px);
+    }
+    
+    button:not(:disabled):active {
+      transform: translateY(0);
+    }
   </style>
-  <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
 </head>
 <body>
   <!-- Auth Modal -->
@@ -609,7 +917,7 @@
             <a href="#" class="watchlist-link"><i class="fa-solid fa-list-ul"></i> Watchlist</a>
             <a href="#" id="openSettings"><i class="fa-solid fa-gear"></i> Settings</a>
             <div class="dropdown-divider"></div>
-            <a href="#" onclick="signOut()"><i class="fa-solid fa-arrow-right-from-bracket"></i> Sign Out</a>
+            <a href="#" onclick="return signOut(event)"><i class="fa-solid fa-arrow-right-from-bracket"></i> Sign Out</a>
           </div>
         </div>
       </div>
@@ -645,7 +953,7 @@
         <!-- Anime cards will be inserted here -->
       </div>
     </section>
-    <section class="chat-container">
+    <section class="chat-container minimized">
       <div class="chat-header">
         <h2>Community Chat</h2>
         <div class="controls">
@@ -732,24 +1040,333 @@
     </div>
   </footer>
 
-  <!-- IndexedDB and artplayer libraries -->
-  <script src="https://cdn.jsdelivr.net/npm/idb@7/build/umd.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
-  <script src="https://cdn.jsdelivr.net/npm/artplayer/dist/artplayer.js"></script>
+  <!-- PWA Update Toast -->
+  <div id="pwaUpdateToast" class="pwa-update-toast" style="display: none;">
+    <div class="toast-content">
+      <i class="fas fa-download"></i>
+      <span>A new version is available!</span>
+      <button id="pwaUpdateBtn" class="update-btn">Update</button>
+      <button id="pwaCloseBtn" class="close-btn">&times;</button>
+    </div>
+  </div>
   
-  <!-- Firebase SDK -->
-  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-storage-compat.js"></script>
-  <script src="firebaseConfig.js"></script>
-  <script src="auth.js"></script>
-  <script src="app.js"></script>
-  <script src="chat.js"></script>
-  <script src="profile.js"></script>
+  <!-- PWA Install Prompt -->
+  <div id="pwaInstallPrompt" class="pwa-install-prompt" style="display: none;">
+    <div class="install-content">
+      <i class="fas fa-mobile-alt"></i>
+      <h3>Install AnimeRealm</h3>
+      <p>Get the full app experience with offline access and faster loading!</p>
+      <div class="install-actions">
+        <button id="pwaInstallBtn" class="install-btn">
+          <i class="fas fa-download"></i> Install App
+        </button>
+        <button id="pwaInstallCloseBtn" class="close-install-btn">Maybe Later</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add loading overlay -->
+  <div id="loadingOverlay" class="loading-overlay">
+    <div class="loading-content">
+      <div class="loading-spinner"></div>
+      <p>Loading...</p>
+    </div>
+  </div>
+  
+  <!-- Add toast container -->
+  <div id="toastContainer" class="toast-container"></div>
+  
+  <!-- Add scroll to top button -->
+  <button id="scrollToTop" class="scroll-to-top">
+    <i class="fas fa-chevron-up"></i>
+  </button>
+  
+  <!-- Add keyboard shortcuts modal -->
+  <div id="shortcutsModal" class="shortcuts-modal">
+    <div class="shortcuts-content">
+      <h2>Keyboard Shortcuts</h2>
+      <div class="shortcut-item">
+        <span>Search</span>
+        <span class="shortcut-key">Ctrl + K</span>
+      </div>
+      <div class="shortcut-item">
+        <span>Home</span>
+        <span class="shortcut-key">Ctrl + H</span>
+      </div>
+      <div class="shortcut-item">
+        <span>Settings</span>
+        <span class="shortcut-key">Ctrl + ,</span>
+      </div>
+      <div class="shortcut-item">
+        <span>Toggle Chat</span>
+        <span class="shortcut-key">Ctrl + Enter</span>
+      </div>
+      <div class="shortcut-item">
+        <span>Show Shortcuts</span>
+        <span class="shortcut-key">?</span>
+      </div>
+      <div class="shortcut-item">
+        <span>Close Modal</span>
+        <span class="shortcut-key">Esc</span>
+      </div>
+      <button onclick="document.getElementById('shortcutsModal').style.display='none'" 
+              style="margin-top: 1rem; padding: 0.5rem 1rem; background: var(--primary-color); color: white; border: none; border-radius: 5px;">
+        Close
+      </button>
+    </div>
+  </div>
+
+  <!-- PWA Service Worker Registration -->
+  <script>
+    // PWA Service Worker Registration
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', async () => {
+        try {
+          const registration = await navigator.serviceWorker.register('/service-worker.js', {
+            scope: '/'
+          });
+          
+          console.log('Service Worker registered successfully:', registration);
+          
+          // Handle service worker updates
+          registration.addEventListener('updatefound', () => {
+            const newWorker = registration.installing;
+            if (newWorker) {
+              newWorker.addEventListener('statechange', () => {
+                if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+                  showUpdateToast();
+                }
+              });
+            }
+          });
+          
+          // Check for updates periodically
+          setInterval(() => {
+            registration.update();
+          }, 60000); // Check every minute
+          
+        } catch (error) {
+          console.error('Service Worker registration failed:', error);
+        }
+      });
+    }
+
+    // PWA Install Prompt
+    let deferredPrompt = null;
+    
+    window.addEventListener('beforeinstallprompt', (e) => {
+      console.log('PWA install prompt triggered');
+      e.preventDefault();
+      deferredPrompt = e;
+      
+      // Show custom install prompt after a delay
+      setTimeout(() => {
+        if (deferredPrompt && !localStorage.getItem('pwa-install-dismissed')) {
+          showInstallPrompt();
+        }
+      }, 10000); // Show after 10 seconds
+    });
+
+    window.addEventListener('appinstalled', (e) => {
+      console.log('PWA was installed');
+      localStorage.setItem('pwa-installed', 'true');
+      hideInstallPrompt();
+      showToast('AnimeRealm installed successfully!', 'success');
+    });
+
+    function showInstallPrompt() {
+      const installPrompt = document.getElementById('pwaInstallPrompt');
+      if (installPrompt) {
+        installPrompt.style.display = 'block';
+        setTimeout(() => installPrompt.classList.add('show'), 100);
+      }
+    }
+
+    function hideInstallPrompt() {
+      const installPrompt = document.getElementById('pwaInstallPrompt');
+      if (installPrompt) {
+        installPrompt.classList.remove('show');
+        setTimeout(() => installPrompt.style.display = 'none', 300);
+      }
+    }
+
+    function showUpdateToast() {
+      const updateToast = document.getElementById('pwaUpdateToast');
+      if (updateToast) {
+        updateToast.style.display = 'block';
+        setTimeout(() => updateToast.classList.add('show'), 100);
+      }
+    }
+
+    // PWA Event Handlers
+    document.addEventListener('DOMContentLoaded', () => {
+      const pwaInstallBtn = document.getElementById('pwaInstallBtn');
+      const pwaInstallCloseBtn = document.getElementById('pwaInstallCloseBtn');
+      const pwaUpdateBtn = document.getElementById('pwaUpdateBtn');
+      const pwaCloseBtn = document.getElementById('pwaCloseBtn');
+
+      if (pwaInstallBtn) {
+        pwaInstallBtn.addEventListener('click', async () => {
+          if (deferredPrompt) {
+            deferredPrompt.prompt();
+            const { outcome } = await deferredPrompt.userChoice;
+            console.log('PWA install choice:', outcome);
+            
+            if (outcome === 'dismissed') {
+              localStorage.setItem('pwa-install-dismissed', 'true');
+            }
+            
+            deferredPrompt = null;
+            hideInstallPrompt();
+          }
+        });
+      }
+
+      if (pwaInstallCloseBtn) {
+        pwaInstallCloseBtn.addEventListener('click', () => {
+          localStorage.setItem('pwa-install-dismissed', 'true');
+          hideInstallPrompt();
+        });
+      }
+
+      if (pwaUpdateBtn) {
+        pwaUpdateBtn.addEventListener('click', () => {
+          if (navigator.serviceWorker.controller) {
+            navigator.serviceWorker.controller.postMessage({ type: 'SKIP_WAITING' });
+            window.location.reload();
+          }
+        });
+      }
+
+      if (pwaCloseBtn) {
+        pwaCloseBtn.addEventListener('click', () => {
+          document.getElementById('pwaUpdateToast').style.display = 'none';
+        });
+      }
+
+      // Handle URL parameters for shortcuts
+      const urlParams = new URLSearchParams(window.location.search);
+      const filter = urlParams.get('filter');
+      const section = urlParams.get('section');
+      
+      if (filter) {
+        switch(filter) {
+          case 'popular':
+            setTimeout(() => filterAnimeByCategory('Popular'), 1000);
+            break;
+          case 'new':
+            setTimeout(() => filterAnimeByCategory('New'), 1000);
+            break;
+        }
+      } else if (section === 'watchlist') {
+        setTimeout(() => {
+          if (typeof showWatchlist === 'function') {
+            showWatchlist();
+          }
+        }, 1000);
+      }
+      
+      // Handle shared content
+      const shared = urlParams.get('shared');
+      if (shared === 'true') {
+        const title = urlParams.get('title');
+        const text = urlParams.get('text');
+        const url = urlParams.get('url');
+        
+        if (title || text || url) {
+          setTimeout(() => {
+            showToast(`Shared: ${title || text || 'Content'}`, 'info');
+          }, 1000);
+        }
+      }
+    });
+  
+    function navigateSection(section) {
+      // First update the nav links active state
+      const navLinks = document.querySelectorAll('.nav-links a');
+      navLinks.forEach(link => {
+        link.classList.remove('active');
+        if (link.textContent === section) {
+          link.classList.add('active');
+        }
+      });
+
+      // Check for special sections
+      if (section === 'Watchlist') {
+        if (typeof showWatchlist === 'function') {
+          showWatchlist();
+        } else {
+          console.error('showWatchlist function not found');
+          alert('Watchlist feature coming soon!');
+          // Fallback to home
+          filterAnimeByCategory('Home');
+        }
+      } else {
+        // Filter content for standard sections
+        filterAnimeByCategory(section);
+      }
+
+      // Smooth scroll to trending section
+      const trendingSection = document.querySelector('.trending');
+      if (trendingSection) {
+        window.scrollTo({
+          top: trendingSection.offsetTop - 100,
+          behavior: 'smooth'
+        });
+      }
+    }
+  
+    // Define showWatchlist if it doesn't exist
+    if (typeof showWatchlist !== 'function') {
+      window.showWatchlist = function() {
+        // Use Supabase to check auth and open auth modal if needed; do not force Home
+        const openAuth = () => {
+          const authModal = document.getElementById('authModal');
+          if (authModal) {
+            authModal.style.display = 'flex';
+            authModal.classList.add('show');
+          }
+        };
+        if (window.supabase?.auth) {
+          window.supabase.auth.getSession().then(({ data: { session } }) => {
+            if (!session?.user) openAuth();
+          }).catch(() => openAuth());
+        } else {
+          openAuth();
+        }
+      };
+    }
+  </script>
+
+  <!-- Add auto-save indicator -->
+  <div id="autoSaveIndicator" class="auto-save-indicator">
+    <i class="fas fa-check"></i> Saved
+  </div>
+
+  <!-- Move password toggle functionality to app.js -->
   <script>
     // Clear console at page load
     console.clear();
+    
+    // Password toggle function - moved here for immediate availability
+    window.togglePassword = function(inputId, button) {
+      const input = document.getElementById(inputId);
+      const icon = button.querySelector('i');
+      
+      if (!input || !icon) return;
+      
+      if (input.type === 'password') {
+        input.type = 'text';
+        icon.classList.remove('fa-eye');
+        icon.classList.add('fa-eye-slash');
+        button.setAttribute('aria-label', 'Hide password');
+      } else {
+        input.type = 'password';
+        icon.classList.remove('fa-eye-slash');
+        icon.classList.add('fa-eye');
+        button.setAttribute('aria-label', 'Show password');
+      }
+    };
     
     document.addEventListener('DOMContentLoaded', () => {
       try {
@@ -840,58 +1457,6 @@
           });
         }
         
-        // Fix episode selection for episodes list
-        document.addEventListener('click', function(e) {
-          // Find closest episode-item parent
-          const episodeItem = e.target.closest('.episode-item');
-          if (episodeItem && episodeItem.dataset.episode) {
-            const episode = parseInt(episodeItem.dataset.episode);
-            const currentActiveEp = document.querySelector('.episode-item.active');
-            const currentEpNum = currentActiveEp ? parseInt(currentActiveEp.dataset.episode) : 1;
-            
-            // Only proceed if clicking a different episode
-            if (episode !== currentEpNum) {
-              // Remove active class from all episodes
-              document.querySelectorAll('.episode-item').forEach(item => {
-                item.classList.remove('active');
-              });
-              
-              // Add active class to clicked episode
-              episodeItem.classList.add('active');
-              
-              // Get anime data from current player
-              const videoTitle = document.querySelector('.video-title');
-              let animeTitle = '';
-              if (videoTitle) {
-                animeTitle = videoTitle.textContent.split(' - ')[0];
-              }
-              
-              // Check if we have a player instance
-              if (window.artPlayerInstance) {
-                try {
-                  window.artPlayerInstance.destroy();
-                } catch (err) {
-                  console.warn("Error destroying player:", err);
-                }
-              }
-              
-              // Get anime ID from URL or data attribute
-              const animeInfoCard = document.querySelector('.anime-info-card');
-              const animeId = animeInfoCard?.dataset?.animeId;
-              const animeImg = animeInfoCard?.querySelector('img')?.src;
-              const episodeCount = document.querySelectorAll('.episode-item').length || 12;
-              
-              // Initialize new episode
-              initializeVideoPlayer({
-                id: animeId || '1',
-                title: animeTitle || 'Anime Title',
-                episodes: episodeCount,
-                image: animeImg || ''
-              }, episode);
-            }
-          }
-        }, true);
-        
         // Add close functionality for auth modal
         const authModalCloseBtn = authModal?.querySelector('.close');
         if (authModalCloseBtn) {
@@ -973,75 +1538,6 @@
         console.error('Error in DOMContentLoaded main handler:', error);
       }
     });
-  
-    function navigateSection(section) {
-      // First update the nav links active state
-      const navLinks = document.querySelectorAll('.nav-links a');
-      navLinks.forEach(link => {
-        link.classList.remove('active');
-        if (link.textContent === section) {
-          link.classList.add('active');
-        }
-      });
-
-      // Check for special sections
-      if (section === 'Watchlist') {
-        if (typeof showWatchlist === 'function') {
-          showWatchlist();
-        } else {
-          console.error('showWatchlist function not found');
-          alert('Watchlist feature coming soon!');
-          // Fallback to home
-          filterAnimeByCategory('Home');
-        }
-      } else {
-        // Filter content for standard sections
-        filterAnimeByCategory(section);
-      }
-
-      // Smooth scroll to trending section
-      const trendingSection = document.querySelector('.trending');
-      if (trendingSection) {
-        window.scrollTo({
-          top: trendingSection.offsetTop - 100,
-          behavior: 'smooth'
-        });
-      }
-    }
-  
-    // Define showWatchlist if it doesn't exist
-    if (typeof showWatchlist !== 'function') {
-      window.showWatchlist = function() {
-        const user = firebase.auth().currentUser;
-        if (!user) {
-          // Show auth modal if user is not signed in
-          const authModal = document.getElementById('authModal');
-          if (authModal) {
-            authModal.style.display = 'flex';
-            authModal.classList.add('show');
-          }
-          return;
-        }
-        
-        alert('Watchlist feature is coming soon!');
-        // For now, redirect to home
-        filterAnimeByCategory('Home');
-      };
-    }
-  </script>
-  <script>
-    function togglePassword(inputId, button) {
-      const input = document.getElementById(inputId);
-      const icon = button.querySelector('i');
-      
-      if (input.type === 'password') {
-        input.type = 'text';
-        icon.className = 'fas fa-eye-slash';
-      } else {
-        input.type = 'password';
-        icon.className = 'fas fa-eye';
-      }
-    }
   </script>
 </body>
 </html>

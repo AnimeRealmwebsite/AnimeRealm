@@ -1,0 +1,129 @@
+{
+  "name": "AnimeRealm - Watch Anime Online",
+  "short_name": "AnimeRealm",
+  "description": "Your gateway to the world of anime. Watch, discover, and track your favorite anime series and movies.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#1A1A1A",
+  "theme_color": "#6C63FF",
+  "orientation": "portrait-primary",
+  "scope": "/",
+  "lang": "en",
+  "categories": ["entertainment", "lifestyle"],
+  "icons": [
+    {
+      "src": "https://api.dicebear.com/7.x/shapes/png?seed=animerealm&size=72",
+      "sizes": "72x72",
+      "type": "image/png",
+      "purpose": "maskable any"
+    },
+    {
+      "src": "https://api.dicebear.com/7.x/shapes/png?seed=animerealm&size=96",
+      "sizes": "96x96",
+      "type": "image/png",
+      "purpose": "maskable any"
+    },
+    {
+      "src": "https://api.dicebear.com/7.x/shapes/png?seed=animerealm&size=128",
+      "sizes": "128x128",
+      "type": "image/png",
+      "purpose": "maskable any"
+    },
+    {
+      "src": "https://api.dicebear.com/7.x/shapes/png?seed=animerealm&size=144",
+      "sizes": "144x144",
+      "type": "image/png",
+      "purpose": "maskable any"
+    },
+    {
+      "src": "https://api.dicebear.com/7.x/shapes/png?seed=animerealm&size=152",
+      "sizes": "152x152",
+      "type": "image/png",
+      "purpose": "maskable any"
+    },
+    {
+      "src": "https://api.dicebear.com/7.x/shapes/png?seed=animerealm&size=192",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable any"
+    },
+    {
+      "src": "https://api.dicebear.com/7.x/shapes/png?seed=animerealm&size=384",
+      "sizes": "384x384",
+      "type": "image/png",
+      "purpose": "maskable any"
+    },
+    {
+      "src": "https://api.dicebear.com/7.x/shapes/png?seed=animerealm&size=512",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable any"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Popular Anime",
+      "short_name": "Popular",
+      "description": "View popular anime series",
+      "url": "/?filter=popular",
+      "icons": [
+        {
+          "src": "https://api.dicebear.com/7.x/shapes/png?seed=popular&size=192",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
+    },
+    {
+      "name": "New Releases",
+      "short_name": "New",
+      "description": "Check out new anime releases",
+      "url": "/?filter=new",
+      "icons": [
+        {
+          "src": "https://api.dicebear.com/7.x/shapes/png?seed=new&size=192",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
+    },
+    {
+      "name": "My Watchlist",
+      "short_name": "Watchlist",
+      "description": "View your anime watchlist",
+      "url": "/?section=watchlist",
+      "icons": [
+        {
+          "src": "https://api.dicebear.com/7.x/shapes/png?seed=watchlist&size=192",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
+    }
+  ],
+  "screenshots": [
+    {
+      "src": "https://via.placeholder.com/540x720/6C63FF/FFFFFF?text=AnimeRealm+Mobile",
+      "sizes": "540x720",
+      "type": "image/png",
+      "form_factor": "narrow"
+    },
+    {
+      "src": "https://via.placeholder.com/1280x720/6C63FF/FFFFFF?text=AnimeRealm+Desktop",
+      "sizes": "1280x720",
+      "type": "image/png",
+      "form_factor": "wide"
+    }
+  ],
+  "related_applications": [],
+  "prefer_related_applications": false,
+  "share_target": {
+    "action": "/",
+    "method": "GET",
+    "params": {
+      "title": "title",
+      "text": "text",
+      "url": "url"
+    }
+  }
+}

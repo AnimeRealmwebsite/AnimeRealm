@@ -148,7 +148,7 @@ query ($page: Int, $perPage: Int) {
 const POPULAR_QUERY = `
 query ($page: Int, $perPage: Int) {
   Page(page: $page, perPage: $perPage) {
-    media(sort: POPULARITY_DESC, type: ANIME, isAdult: false, countryOfOrigin: "JP") {
+    media(sort: POPULARITY_DESC, type: ANIME, countryOfOrigin: "JP", isAdult: false) {
       id
       title {
         romaji
@@ -512,9 +512,67 @@ query ($page: Int, $perPage: Int) {
 async function fetchFromAniList(query, variables = {}, cacheKey = null) {
   let attempts = 0;
   let lastError = null;
-  const MAX_ATTEMPTS = 5; // Increase max retries
-  const BASE_DELAY = 1000; // Base delay of 1 second
-  const MAX_DELAY = 10000; // Max delay of 10 seconds
+  const MAX_ATTEMPTS = 5;
+  const BASE_DELAY = 1000;
+  const MAX_DELAY = 10000;
+
+  // Handle empty results with safer fallback queries
+  function getQueryWithRelaxedFilters(originalQuery) {
+    // Base query parts 
+    const baseFields = `
+      id
+      title {
+        romaji
+        english
+        native
+      }
+      description
+      episodes
+      status
+      seasonYear
+      season
+      format
+      averageScore
+      popularity
+      coverImage {
+        large
+      }
+      genres
+      studios {
+        nodes {
+          name
+        }
+      }
+    `;
+
+    // Adult content filter option as variable instead of hardcoded
+    const adultFilter = variables.includeAdult ? '' : ', isAdult: false';
+    const originFilter = variables.anyOrigin ? '' : ', countryOfOrigin: "JP"';
+    
+    // Construct dynamic query based on presence of filters
+    return `
+      query ($page: Int, $perPage: Int${variables.search ? ', $search: String' : ''}) {
+        Page(page: $page, perPage: $perPage) {
+          media(
+            ${variables.search ? 'search: $search,' : ''}
+            type: ANIME
+            sort: [POPULARITY_DESC, SCORE_DESC]
+            ${adultFilter}
+            ${originFilter}
+          ) {
+            ${baseFields}
+            ${variables.includeNextAiring ? `
+              nextAiringEpisode {
+                episode
+                airingAt
+                timeUntilAiring
+              }
+            ` : ''}
+          }
+        }
+      }
+    `;
+  }
 
   // Initialize cache for this query if needed
   if (cacheKey && !cache[cacheKey]) {
@@ -596,10 +654,11 @@ async function fetchFromAniList(query, variables = {}, cacheKey = null) {
 
       // Special handling for empty results
       if (data.data.Page && (!data.data.Page.media || data.data.Page.media.length === 0)) {
-        // Try fallback query with less restrictive filters
-        if (!query.includes('isAdult: true')) {
-          const fallbackQuery = query.replace('isAdult: false', '')
-                                   .replace('countryOfOrigin: "JP"', '');
+        // Try fallback query with relaxed filters
+        if (!variables.includeAdult && !variables.anyOrigin) {
+          // First try without origin filter
+          variables.anyOrigin = true;
+          const fallbackQuery = getQueryWithRelaxedFilters(query);
           return fetchFromAniList(fallbackQuery, variables, null);
         }
       }
@@ -625,8 +684,7 @@ async function fetchFromAniList(query, variables = {}, cacheKey = null) {
 
       // Special handling for network errors
       if (error.name === 'TypeError' || error.message.includes('Failed to fetch')) {
-        // Try alternative API endpoint if available
-        // For now, just wait longer
+        // Wait longer for network issues
         await new Promise(resolve => setTimeout(resolve, 3000));
       }
 
@@ -640,7 +698,7 @@ async function fetchFromAniList(query, variables = {}, cacheKey = null) {
           }
         }
 
-        // If no cache available, return empty but valid data structure
+        // Return valid empty data structure as last resort
         return {
           Page: {
             media: [],
@@ -673,8 +731,14 @@ async function fetchFromAniList(query, variables = {}, cacheKey = null) {
   };
 }
 
+// Expose fetchFromAniList globally for modules that override it later
+window.fetchFromAniList = window.fetchFromAniList || fetchFromAniList;
+
 // Enhanced initializeAnimeData with parallel loading and fallbacks
 async function initializeAnimeData() {
+  // Prevent home refresh when watchlist is active
+  if (window.currentView === 'watchlist') return;
+  
   try {
     // Show loading state in UI
     const trendingGrid = document.getElementById('trending-grid');
@@ -690,9 +754,24 @@ async function initializeAnimeData() {
     trendingGrid.innerHTML = loadingHtml;
     recentGrid.innerHTML = loadingHtml;
 
-    // Fetch both trending anime and popular donghua in parallel 
-    const [trendingResult, donghuaResult, dailyUpdatesResult] = await Promise.allSettled([
-      fetchFromAniList(TRENDING_QUERY, { page: 1, perPage: 24 }, 'trending'),
+    // Fetch different types of anime in parallel for variety
+    const queries = [
+      // Trending anime
+      fetchFromAniList(TRENDING_QUERY, { page: 1, perPage: 10 }, 'trending'),
+      // Popular anime
+      fetchFromAniList(POPULAR_QUERY, { page: 1, perPage: 10 }, 'popular'),
+      // Recent anime
+      fetchFromAniList(RECENT_QUERY, { page: 1, perPage: 10 }, 'recent'),
+      // Seasonal anime
+      fetchFromAniList(SEASONAL_QUERY, { 
+        season: getCurrentSeason(),
+        seasonYear: new Date().getFullYear(),
+        page: 1,
+        perPage: 10
+      }, 'seasonal'),
+      // Popular movies
+      fetchFromAniList(MOVIES_QUERY, { page: 1, perPage: 5 }, 'movies'),
+      // Popular donghua
       fetchFromAniList(`
         query ($page: Int, $perPage: Int) {
           Page(page: $page, perPage: $perPage) {
@@ -725,85 +804,71 @@ async function initializeAnimeData() {
             }
           }
         }
-      `, { page: 1, perPage: 10 }, 'donghua'),
-      fetchFromAniList(DAILY_UPDATES_QUERY, { page: 1, perPage: 24 }, 'daily_updates')
-    ]);
+      `, { page: 1, perPage: 5 }, 'donghua')
+    ];
 
-    // Process trending data
-    if (trendingResult.status === 'fulfilled' && trendingResult.value?.Page?.media?.length > 0) {
+    const results = await Promise.allSettled(queries);
+    
+    // Collect all valid anime entries
+    let allAnime = [];
+    results.forEach(result => {
+      if (result.status === 'fulfilled' && result.value?.Page?.media) {
+        allAnime = [...allAnime, ...result.value.Page.media];
+      }
+    });
+
+    // Remove duplicates by ID
+    const uniqueAnime = Array.from(new Map(allAnime.map(item => [item.id, item])).values());
+
+    // Shuffle the array
+    const shuffledAnime = uniqueAnime.sort(() => Math.random() - 0.5);
+
+    // Take first 5 for hero slider
+    const heroAnimeList = shuffledAnime.slice(0, 5);
+
+    // Use remaining anime for trending and recent sections
+    const remainingAnime = shuffledAnime.slice(5);
+    const trendingAnime = remainingAnime.slice(0, 24);
+    const recentAnime = remainingAnime.slice(24, 48);
+
+    // Process trending grid
+    if (trendingGrid && trendingAnime.length > 0) {
       const trendingFragment = document.createDocumentFragment();
-      trendingResult.value.Page.media.forEach(anime => {
+      trendingAnime.forEach(anime => {
         const animeData = convertAnimeData(anime);
-        trendingFragment.appendChild(createAnimeCard(animeData));
+        if (animeData) trendingFragment.appendChild(createAnimeCard(animeData));
       });
       trendingGrid.innerHTML = '';
       trendingGrid.appendChild(trendingFragment);
-
-      // Create combined list for hero slider with both anime and donghua
-      const sliderAnimeList = [...trendingResult.value.Page.media.slice(0, 3)];
-      
-      // Add 1-2 popular donghua to the slider if available
-      if (donghuaResult.status === 'fulfilled' && donghuaResult.value?.Page?.media?.length > 0) {
-        sliderAnimeList.push(...donghuaResult.value.Page.media.slice(0, 2));
-      }
-      
-      // Update hero slider with mixed content
-      updateHeroSlider(sliderAnimeList.map(convertAnimeData).filter(item => item !== null));
-    } else {
-      trendingGrid.innerHTML = `
-        <div class="error-state">
-          <i class="fas fa-exclamation-circle"></i>
-          <p>Failed to load trending anime</p>
-          <button onclick="initializeAnimeData()" class="retry-btn">
-            <i class="fas fa-redo"></i> Retry
-          </button>
-        </div>
-      `;
     }
 
-    // Process daily updates data - using different layout for updates
-    if (dailyUpdatesResult.status === 'fulfilled' && dailyUpdatesResult.value?.Page?.media?.length > 0) {
+    // Process recent grid
+    if (recentGrid && recentAnime.length > 0) {
       const recentFragment = document.createDocumentFragment();
-      const dailyUpdates = dailyUpdatesResult.value.Page.media;
-      
-      // Sort by next airing episode time
-      dailyUpdates.sort((a, b) => {
-        const aTime = a.nextAiringEpisode?.timeUntilAiring || Infinity;
-        const bTime = b.nextAiringEpisode?.timeUntilAiring || Infinity;
-        return aTime - bTime;
-      });
-
-      dailyUpdates.forEach(anime => {
+      recentAnime.forEach(anime => {
         const animeData = convertAnimeData(anime);
-        animeData.lastUpdated = anime.updatedAt * 1000; // Convert to milliseconds
-        const updatedCard = createDailyUpdateCard(animeData, anime.nextAiringEpisode);
-        recentFragment.appendChild(updatedCard);
+        if (animeData) recentFragment.appendChild(createAnimeCard(animeData));
       });
-      
       recentGrid.innerHTML = '';
       recentGrid.appendChild(recentFragment);
-
-      // Update section title
-      const recentTitle = document.querySelector('.recently-updated h2');
-      if (recentTitle) {
-        recentTitle.innerHTML = '📺 Daily Anime Updates';
-      }
-    } else {
-      recentGrid.innerHTML = `
-        <div class="error-state">
-          <i class="fas fa-exclamation-circle"></i>
-          <p>Failed to load daily updates</p>
-          <button onclick="initializeAnimeData()" class="retry-btn">
-            <i class="fas fa-redo"></i> Retry
-          </button>
-        </div>
-      `;
     }
+
+    // Update hero slider with mixed content
+    updateHeroSlider(heroAnimeList.map(convertAnimeData).filter(item => item !== null));
 
   } catch (error) {
     console.error('Error initializing anime data:', error);
     handleLoadingError(trendingGrid, recentGrid);
   }
+}
+
+// Helper function to get current season
+function getCurrentSeason() {
+  const month = new Date().getMonth() + 1;
+  if (month >= 3 && month <= 5) return 'SPRING';
+  if (month >= 6 && month <= 8) return 'SUMMER';
+  if (month >= 9 && month <= 11) return 'FALL';
+  return 'WINTER';
 }
 
 // Enhanced daily update card creation
@@ -820,7 +885,7 @@ function createDailyUpdateCard(anime, nextEpisode) {
     nextEpisodeInfo = `
       <div class="next-episode-info">
         <span class="next-ep">Episode ${nextEpisode.episode}</span>
-        <span class="air-time">Airing: ${timeUntil}</span>
+        <span class="air-time">${timeUntil}</span>
         <div class="air-date">
           ${airDate.toLocaleDateString(undefined, { 
             weekday: 'long', 
@@ -1025,11 +1090,10 @@ window.showAnimeDetails = async function(anime) {
         });
       
       // Race between API call and timeout
-      detailedData = await Promise.race([fetchPromise, timeoutPromise]);
+      media = await Promise.race([fetchPromise, timeoutPromise]);
       
-      if (detailedData?.Media) {
-        media = detailedData.Media;
-        cache.detailedAnime.set(anime.id, { Media: detailedData });
+      if (media?.Media) {
+        cache.detailedAnime.set(anime.id, { Media: media });
       }
     }
 
@@ -1314,11 +1378,16 @@ window.showAnimeDetails = async function(anime) {
 
       // Check watchlist status after modal is created
       try {
-        const user = firebase.auth().currentUser;
-        if (user) {
-          const watchlistRef = firebase.database().ref(`users/${user.uid}/watchlist/${media.id}`);
-          const snapshot = await watchlistRef.once('value');
-          if (snapshot.exists()) {
+        const { data: { session } } = await window.supabase.auth.getSession();
+        if (session?.user) {
+          const { data: snapshot, error } = await window.supabase
+            .from('watchlist')
+            .select('id')
+            .eq('user_id', session.user.id)
+            .eq('anime_id', media.id)
+            .single();
+          
+          if (!error && snapshot) {
             const watchlistBtn = modal.querySelector(`.add-list-btn[data-anime-id="${media.id}"]`);
             if (watchlistBtn) {
               watchlistBtn.innerHTML = '<i class="fas fa-check"></i> In List';
@@ -1406,7 +1475,7 @@ window.showAnimeDetails = async function(anime) {
   });
 };
 
-// Enhanced video player initialization
+// Enhanced video player initialization 
 async function initializeVideoPlayer(anime, episodeNumber = 1) {
   if (!anime || !anime.id) {
     console.error('Invalid anime data provided to video player');
@@ -1431,47 +1500,16 @@ async function initializeVideoPlayer(anime, episodeNumber = 1) {
     if (videoPlayerModal) videoPlayerModal.classList.add('show');
     if (videoTitle) videoTitle.textContent = `${anime.title} - Episode ${episodeNumber}`;
 
-    // Initialize artplayer
+    // Initialize video container with message
     const videoContainer = document.querySelector('.video-container');
     if (videoContainer) {
-      if (window.artPlayerInstance) {
-        try {
-          window.artPlayerInstance.destroy();
-        } catch (err) {
-          console.warn('Error destroying previous player:', err);
-        }
-      }
-
-      const options = {
-        container: '#artplayer-container',
-        url: '', // URL will be set dynamically once we have video URL
-        volume: 0.8,
-        autoplay: false,
-        pip: true,
-        autoSize: true,
-        autoMini: true,
-        screenshot: true,
-        setting: true,
-        loop: false,
-        flip: true,
-        playbackRate: true,
-        aspectRatio: true,
-        fullscreen: true,
-        fullscreenWeb: true,
-        subtitleOffset: true,
-        miniProgressBar: true,
-        mutex: true,
-        backdrop: true,
-        playsInline: true,
-        theme: '#6C63FF',
-        lang: navigator.language.toLowerCase(),
-        whitelist: ['*'],
-        moreVideoAttr: {
-          crossOrigin: 'anonymous',
-        },
-      };
-
-      window.artPlayerInstance = new Artplayer(options);
+      videoContainer.innerHTML = `
+        <div class="error-state">
+          <i class="fas fa-film"></i>
+          <h3>Coming Soon</h3>
+          <p>Video playback functionality will be available soon!</p>
+        </div>
+      `;
     }
 
     // Get detailed anime info if not already available
@@ -1531,33 +1569,11 @@ async function initializeVideoPlayer(anime, episodeNumber = 1) {
 
     // Create episode list with thumbnails and descriptions
     if (episodeList) {
-      episodeList.innerHTML = ''; // Clear existing episodes
-      const totalEpisodes = anime.episodes || (animeDetails?.episodes) || 12;
-      
-      for (let i = 1; i <= totalEpisodes; i++) {
-        const episodeItem = document.createElement('div');
-        episodeItem.className = `episode-item ${i === episodeNumber ? 'active' : ''}`;
-        episodeItem.dataset.episode = i;
-        
-        // Generate episode description
-        const description = `Episode ${i}: ${generateEpisodeDescription(anime.title, i)}`;
-        
-        // Create thumbnail URL - using anime cover as fallback
-        const thumbnailUrl = anime.image || (animeDetails ? animeDetails.coverImage.large : '');
-        
-        episodeItem.innerHTML = `
-          <div class="episode-thumbnail">
-            <img src="${thumbnailUrl}" alt="Episode ${i}">
-          </div>
-          <div class="episode-info">
-            <div class="episode-number">Episode ${i}</div>
-            <div class="episode-description" title="${description}">${truncateText(description, 60)}</div>
-            <div class="episode-description-full">${description}</div>
-          </div>
-        `;
-        
-        episodeList.appendChild(episodeItem);
-      }
+      episodeList.innerHTML = `
+        <div class="loading-message" style="position:static;color:var(--text-secondary);padding:0.75rem;">
+          <i class="fas fa-list" style="margin-right:8px;"></i> Episodes list coming soon
+        </div>
+      `;
     }
 
   } catch (error) {
@@ -1649,6 +1665,8 @@ async function loadTVSeries() {
 async function filterAnimeByCategory(category) {
   // Normalize input (small fix)
   const normalizedCategory = category.toLowerCase().replace(/\s+/g, '');
+  // Update current view (avoid 'watchlist' since this is category-based)
+  window.currentView = normalizedCategory === 'home' ? 'home' : normalizedCategory;
 
   // Update nav links active state
   const navLinks = document.querySelectorAll('.nav-links a');
@@ -1697,7 +1715,7 @@ async function filterAnimeByCategory(category) {
     let trendingQuery = '';
     let recentQuery = '';
 
-    // ⚡ Correct category matching
+    // Correct category matching
     switch (normalizedCategory) {
       case 'movies':
         trendingTitle = '🎬 Popular Movies';
@@ -1791,8 +1809,14 @@ async function filterAnimeByCategory(category) {
     document.querySelectorAll('.anime-card').forEach(card => {
       card.addEventListener('click', () => {
         const animeId = card.dataset.animeId;
-        if (animeId && cache.detailedAnime.has(parseInt(animeId))) {
-          const animeData = convertAnimeData(cache.detailedAnime.get(parseInt(animeId)).Media);
+        if (animeId) {
+          const animeData = {
+            id: animeId,
+            title: card.querySelector('h3').textContent,
+            image: card.querySelector('img').src,
+            episodes: card.querySelector('.meta span:first-child')?.textContent.split(' ')[0] || '12',
+            rating: parseFloat(card.querySelector('.meta span:last-child')?.textContent.replace('⭐ ', '') || '0')
+          };
           showAnimeDetails(animeData);
         }
       });
@@ -1803,6 +1827,9 @@ async function filterAnimeByCategory(category) {
     handleLoadingError(trendingGrid, recentGrid);
   }
 }
+
+// Expose filterAnimeByCategory globally before any overrides wrap it
+window.filterAnimeByCategory = window.filterAnimeByCategory || filterAnimeByCategory;
 
 // Helper function to render anime grid from cached HTML
 function renderAnimeGrid(headingElement, gridElement, cachedHtml, headingText) {
@@ -1892,24 +1919,54 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  // Update auth state UI
-  firebase.auth().onAuthStateChanged((user) => {
+  // Listen for profile loaded events to refresh UI
+  window.addEventListener('profileLoaded', (event) => {
+    if (event.detail?.user) {
+      // Refresh any profile-dependent UI elements
+      setTimeout(() => {
+        if (typeof window.refreshUserProfile === 'function') {
+          window.refreshUserProfile();
+        }
+      }, 100);
+    }
+  });
+
+  // Update auth state UI with Supabase
+  window.supabase.auth.onAuthStateChange(async (event, session) => {
+    const user = session?.user || null;
     const authButton = document.getElementById('authButton');
     const profileDropdown = document.getElementById('profileDropdown');
     const chatInput = document.getElementById('chatInput');
     const sendMessage = document.getElementById('sendMessage');
     const chatLoginPrompt = document.getElementById('chatLoginPrompt');
 
+    console.log('App auth state changed:', event, user?.id);
+
     if (user) {
       // User is signed in
       if (authButton) authButton.style.display = 'none';
       if (profileDropdown) profileDropdown.style.display = 'inline-block';
       
-      // Get profile data
-      const profileData = JSON.parse(localStorage.getItem(`profile_${user.uid}`) || '{}');
+      // Get profile data from Supabase with retry mechanism
+      let profileData = null;
+      let retryCount = 0;
+      const maxRetries = 3;
+      
+      while (retryCount < maxRetries && !profileData) {
+        try {
+          profileData = await window.loadUserProfile(user.id);
+          if (profileData) break;
+        } catch (error) {
+          console.warn(`Profile load attempt ${retryCount + 1} failed:`, error);
+        }
+        retryCount++;
+        if (retryCount < maxRetries) {
+          await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
+        }
+      }
       
       // Update username display
-      const displayName = profileData.username || user.displayName || user.email.split('@')[0];
+      const displayName = profileData?.username || user.user_metadata?.username || user.email.split('@')[0];
       document.querySelectorAll('.user-display-name').forEach(el => {
         if (el) el.textContent = displayName;
       });
@@ -1919,9 +1976,16 @@ document.addEventListener('DOMContentLoaded', () => {
       if (userEmailEl) userEmailEl.textContent = user.email;
 
       // Update avatar everywhere
-      const avatarUrl = profileData.avatar || user.photoURL || `https://images.ai-tube.com/avatar/${displayName}`;
+      const providerAvatar = user?.user_metadata?.avatar_url || user?.user_metadata?.picture || (user?.identities || []).find(i => i.provider === 'google')?.identity_data?.picture || null;
+      const avatarUrl = profileData?.avatar_url || providerAvatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${user.id}`;
       document.querySelectorAll('.profile-icon, .user-avatar, #avatarPreview').forEach(el => {
-        if (el) el.src = avatarUrl;
+        if (el) {
+          el.src = avatarUrl;
+          el.onerror = function() {
+            this.onerror = null;
+            this.src = `https://api.dicebear.com/7.x/avataaars/svg?seed=${user.id}`;
+          };
+        }
       });
 
       // Enable chat
@@ -1947,31 +2011,13 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  // Update profile modal
-  const profileModal = document.getElementById('profileModal');
-  const editProfileLinks = document.querySelectorAll('[data-toggle="modal"][data-target="#profileModal"]');
-  
-  editProfileLinks.forEach(link => {
-    link.addEventListener('click', (e) => {
-      e.preventDefault();
-      profileModal.classList.add('show');
-      loadUserProfile(); // Load current user's profile data
-    });
-  });
-
   // Sign out handler
-  window.signOut = function() {
-    firebase.auth().signOut()
-      .then(() => {
-        console.log('Signed out successfully');
-        localStorage.removeItem('currentUser');
-        window.location.reload();
-      })
-      .catch((error) => {
-        console.error('Sign out error:', error);
-        alert('Error signing out. Please try again.');
-      });
-  };
+  if (typeof window.signOut !== 'function') {
+    window.signOut = async function(event) {
+      if (event?.preventDefault) event.preventDefault();
+      return (await (window.signOut?.(event)));
+    };
+  }
 
   // Settings modal handler
   const settingsBtn = document.getElementById('openSettings');
@@ -2055,7 +2101,7 @@ document.addEventListener('DOMContentLoaded', () => {
 function updateHeroSlider(animeList) {
   const heroSlide = document.querySelector('.hero-slide');
   let currentSlide = 0;
-  let slideInterval = null; // Track the interval
+  let slideInterval = null;
 
   // Add safety check
   if (!animeList || !Array.isArray(animeList) || animeList.length === 0) {
@@ -2071,13 +2117,63 @@ function updateHeroSlider(animeList) {
     return;
   }
 
-  // Clear any existing interval before setting a new one
+  // Clear any existing interval
   if (window.heroSliderInterval) {
     clearInterval(window.heroSliderInterval);
     window.heroSliderInterval = null;
   }
 
-  function updateSlide() {
+  async function fetchBannerImage(anime) {
+    try {
+      // First check if we have the banner in cache
+      if (cache.detailedAnime.has(anime.id)) {
+        const cachedData = cache.detailedAnime.get(anime.id);
+        if (cachedData?.Media?.bannerImage) {
+          return cachedData.Media.bannerImage;
+        }
+      }
+
+      // If not in cache, fetch from AniList
+      const query = `
+        query ($id: Int) {
+          Media (id: $id, type: ANIME) {
+            bannerImage
+            coverImage {
+              extraLarge
+              large
+            }
+            title {
+              english
+              romaji
+            }
+          }
+        }
+      `;
+
+      const data = await fetchFromAniList(query, { id: parseInt(anime.id) });
+      
+      // Return banner image if available
+      if (data?.Media?.bannerImage) {
+        return data.Media.bannerImage;
+      } 
+      // First fallback: extra large cover image
+      else if (data?.Media?.coverImage?.extraLarge) {
+        return data.Media.coverImage.extraLarge;
+      }
+      // Second fallback: large cover image
+      else if (data?.Media?.coverImage?.large) {
+        return data.Media.coverImage.large;
+      }
+      // Final fallback: original image from anime data
+      return anime.image;
+
+    } catch (error) {
+      console.warn('Error fetching banner:', error);
+      return anime.image; // Fallback to regular image
+    }
+  }
+
+  async function updateSlide() {
     try {
       const anime = animeList[currentSlide];
       if (!anime) return;
@@ -2094,6 +2190,12 @@ function updateHeroSlider(animeList) {
           .trim() : 
         'No description available.';
 
+      // Show loading state while fetching banner
+      heroSlide.querySelector('.slide-bg').style.opacity = '0.5';
+      
+      // Fetch banner image
+      const bannerImage = await fetchBannerImage(anime);
+      
       // Check watchlist status
       checkWatchlistStatus(anime.id);
 
@@ -2137,8 +2239,17 @@ function updateHeroSlider(animeList) {
           </div>
         </div>
         <div class="slide-overlay"></div>
-        <div class="slide-bg" style="background-image: url('${anime.image || ''}')"></div>
+        <div class="slide-bg" style="background-image: url('${bannerImage}')"></div>
       `;
+
+      // Add enhanced slide animations
+      const slideBg = heroSlide.querySelector('.slide-bg');
+      if (slideBg) {
+        slideBg.style.animation = 'fadeZoom 5s ease-in-out forwards';
+        slideBg.addEventListener('animationend', () => {
+          slideBg.style.animation = '';
+        });
+      }
 
       // Handle read more functionality
       const description = heroSlide.querySelector('.description');
@@ -2154,14 +2265,6 @@ function updateHeroSlider(animeList) {
         });
       }
 
-      // Add slide background animation
-      const slideBg = heroSlide.querySelector('.slide-bg');
-      if (slideBg) {
-        slideBg.style.animation = 'fadeZoom 5s ease-in-out forwards';
-        slideBg.addEventListener('animationend', () => {
-          slideBg.style.animation = '';
-        });
-      }
     } catch (error) {
       console.error('Error updating hero slide:', error);
       heroSlide.innerHTML = `
@@ -2178,13 +2281,12 @@ function updateHeroSlider(animeList) {
   // Initialize first slide
   updateSlide();
 
-  // Set up new interval for auto-rotation with proper clearing
+  // Set up auto-rotation with proper clearing
   window.heroSliderInterval = setInterval(() => {
     try {
       currentSlide = (currentSlide + 1) % animeList.length;
       updateSlide();
     } catch (err) {
-      // Silently catch errors in slider update
       if (window.heroSliderInterval) {
         clearInterval(window.heroSliderInterval);
       }
@@ -2554,6 +2656,7 @@ async function loadSeasonalAnime() {
 
 // Function to return to home page
 function returnToHome() {
+  window.currentView = 'home';
   filterAnimeByCategory('Home');
 }
 
@@ -2854,66 +2957,86 @@ document.getElementById('search').addEventListener('keypress', (e) => {
   }
 });
 
-// Add click handler for search button
-document.querySelector('.search-bar button').addEventListener('click', () => {
-  // Trigger search if there's text in the input
-  if (document.getElementById('search').value.trim().length > 0) {
-    const event = new Event('input');
-    document.getElementById('search').dispatchEvent(event);
-    document.getElementById('search').blur(); // Remove focus from search input
-  }
-});
-
 // Add watchlist functionality
 function addToWatchlist(animeId) {
-  const user = firebase.auth().currentUser;
-  if (!user) {
-    // Show auth modal if not logged in
-    const authModal = document.getElementById('authModal');
-    if (authModal) {
-      authModal.style.display = 'flex';
-      authModal.classList.add('show');
-    }
-    return;
-  }
-
-  const watchlistRef = firebase.database().ref(`users/${user.uid}/watchlist/${animeId}`);
-  
-  // Check if already in watchlist
-  watchlistRef.once('value')
-    .then((snapshot) => {
-      if (snapshot.exists()) {
-        // Remove from watchlist
-        return watchlistRef.remove()
-          .then(() => {
-            alert("Removed from watchlist");
-            updateWatchlistButtons(animeId, false);
-          });
-      } else {
-        // Get cached anime data if available
-        let animeData = null;
-        if (cache.detailedAnime && cache.detailedAnime.has(animeId)) {
-          const cachedData = cache.detailedAnime.get(animeId);
-          animeData = cachedData?.Media;
-        }
-        
-        // Save to watchlist with basic info
-        return watchlistRef.set({
-          id: animeId,
-          title: animeData?.title?.english || animeData?.title?.romaji || 'Unknown Anime',
-          image: animeData?.coverImage?.large || '',
-          addedAt: firebase.database.ServerValue.TIMESTAMP
-        })
-        .then(() => {
-          alert("Added to watchlist");
-          updateWatchlistButtons(animeId, true);
-        });
+  window.supabase.auth.getSession().then(({ data: { session } }) => {
+    const user = session?.user;
+    
+    if (!user) {
+      // Show auth modal if not logged in
+      const authModal = document.getElementById('authModal');
+      if (authModal) {
+        authModal.style.display = 'flex';
+        authModal.classList.add('show');
       }
-    })
-    .catch((error) => {
-      console.error("Watchlist error:", error);
-      alert("Failed to update watchlist");
-    });
+      return;
+    }
+
+    // Use Supabase for watchlist instead of Firebase
+    const checkWatchlist = async () => {
+      try {
+        const { data: existingItem, error: checkError } = await window.supabase
+          .from('watchlist')
+          .select('id')
+          .eq('user_id', user.id)
+          .eq('anime_id', animeId)
+          .single();
+
+        if (checkError && checkError.code !== 'PGRST116') {
+          throw checkError;
+        }
+
+        if (existingItem) {
+          // Remove from watchlist
+          const { error } = await window.supabase
+            .from('watchlist')
+            .delete()
+            .eq('id', existingItem.id);
+
+          if (error) throw error;
+
+          showToast("Removed from watchlist", 'success');
+          updateWatchlistButtons(animeId, false);
+        } else {
+          // Get cached anime data if available
+          let animeData = null;
+          if (cache.detailedAnime && cache.detailedAnime.has(animeId)) {
+            const cachedData = cache.detailedAnime.get(animeId);
+            animeData = cachedData?.Media;
+          }
+          
+          // Fetch details if missing to avoid "Unknown Anime"
+          if (!animeData) {
+            try {
+              const detailed = await fetchFromAniList(DETAILED_ANIME_QUERY, { id: parseInt(animeId, 10) });
+              animeData = detailed?.Media || null;
+            } catch (e) { console.warn('Backfill fetch failed:', e); }
+          }
+          
+          // Add to watchlist
+          const { error } = await window.supabase
+            .from('watchlist')
+            .insert({
+              user_id: user.id,
+              anime_id: animeId,
+              title: animeData?.title?.english || animeData?.title?.romaji || (typeof animeId === 'string' ? `Anime #${animeId}` : 'Unknown Anime'),
+              image_url: animeData?.coverImage?.large || animeData?.coverImage?.extraLarge || '',
+              added_at: new Date().toISOString()
+            });
+
+          if (error) throw error;
+
+          showToast("Added to watchlist", 'success');
+          updateWatchlistButtons(animeId, true);
+        }
+      } catch (error) {
+        console.error("Watchlist error:", error);
+        showToast("Failed to update watchlist", 'error');
+      }
+    };
+
+    checkWatchlist();
+  });
 }
 
 // Update watchlist buttons UI
@@ -2930,148 +3053,147 @@ function updateWatchlistButtons(animeId, isInWatchlist) {
   // Also update hero slide button if it's for the same anime
   const addListBtn = document.querySelector('.hero-slide .add-list');
   const heroSlideAnimeId = document.querySelector('.hero-slide')?.dataset?.animeId;
-  if (addListBtn && heroSlideAnimeId === animeId) {
-    if (isInWatchlist) {
-      addListBtn.innerHTML = '<i class="fas fa-check"></i> In List';
-    } else {
-      addListBtn.innerHTML = '<i class="fas fa-plus"></i> Add to List';
-    }
+  if (addListBtn && String(heroSlideAnimeId) === String(animeId)) {
+    addListBtn.innerHTML = isInWatchlist ? '<i class="fas fa-check"></i> In List'
+                                         : '<i class="fas fa-plus"></i> Add to List';
   }
 }
 
 // Show watchlist function
 function showWatchlist() {
-  const user = firebase.auth().currentUser;
-  if (!user) {
-    // Show auth modal if not logged in
-    const authModal = document.getElementById('authModal');
-    if (authModal) {
-      authModal.style.display = 'flex';
-      authModal.classList.add('show');
+  // Lock view to watchlist so home refresh doesn't override
+  window.currentView = 'watchlist';
+  
+  window.supabase.auth.getSession().then(async ({ data: { session } }) => {
+    const user = session?.user;
+    
+    if (!user) {
+      // Show auth modal if not logged in
+      const authModal = document.getElementById('authModal');
+      if (authModal) {
+        authModal.style.display = 'flex';
+        authModal.classList.add('show');
+      }
+      return;
     }
-    return;
-  }
-  
-  // Update UI to show watchlist content
-  const trendingHeading = document.querySelector('.trending h2');
-  const recentHeading = document.querySelector('.recently-updated h2');
-  const trendingGrid = document.getElementById('trending-grid');
-  const recentGrid = document.getElementById('recent-grid');
-  
-  if (trendingHeading) trendingHeading.textContent = '📋 My Watchlist';
-  if (recentHeading) recentHeading.textContent = '🕓 Recently Added to Watchlist';
-  
-  if (trendingGrid) {
-    trendingGrid.innerHTML = '<div class="loading-state"><i class="fas fa-spinner fa-spin"></i><p>Loading watchlist...</p></div>';
-  }
-  if (recentGrid) {
-    recentGrid.innerHTML = '';
-  }
-  
-  // Get watchlist data from Firebase
-  const watchlistRef = firebase.database().ref(`users/${user.uid}/watchlist`);
-  watchlistRef.once('value')
-    .then((snapshot) => {
-      const watchlist = [];
-      snapshot.forEach((childSnapshot) => {
-        watchlist.push({
-          id: childSnapshot.key,
-          ...childSnapshot.val()
-        });
-      });
       
-      if (watchlist.length === 0) {
+      // Update UI to show watchlist content
+      const trendingHeading = document.querySelector('.trending h2');
+      const recentHeading = document.querySelector('.recently-updated h2');
+      const trendingGrid = document.getElementById('trending-grid');
+      const recentGrid = document.getElementById('recent-grid');
+      
+      if (trendingHeading) trendingHeading.textContent = '📋 My Watchlist';
+      if (recentHeading) recentHeading.textContent = '🕓 Recently Added to Watchlist';
+      
+      if (trendingGrid) {
+        trendingGrid.innerHTML = '<div class="loading-state"><i class="fas fa-spinner fa-spin"></i><p>Loading watchlist...</p></div>';
+      }
+      if (recentGrid) {
+        recentGrid.innerHTML = '';
+      }
+      
+      try {
+        // Get watchlist data from Supabase
+        const { data: watchlist, error } = await window.supabase
+          .from('watchlist')
+          .select('*')
+          .eq('user_id', user.id)
+          .order('added_at', { ascending: false });
+        
+        // Backfill unknown entries with AniList data before rendering
+        for (const item of watchlist) {
+          if (!item.title || item.title === 'Unknown Anime' || !item.image_url) {
+            try {
+              const detail = await fetchFromAniList(DETAILED_ANIME_QUERY, { id: parseInt(item.anime_id, 10) });
+              const media = detail?.Media;
+              if (media) {
+                item.title = media.title?.english || media.title?.romaji || item.title;
+                item.image_url = media.coverImage?.large || media.coverImage?.extraLarge || item.image_url;
+                window.supabase.from('watchlist').update({ title: item.title, image_url: item.image_url }).eq('id', item.id);
+              }
+            } catch (e) { console.warn('Watchlist backfill failed:', e); }
+          }
+        }
+        
+        if (trendingGrid) {
+          trendingGrid.innerHTML = '';
+          // Display all watchlist items
+          watchlist.forEach(item => {
+            const animeCard = createWatchlistCard(item);
+            trendingGrid.appendChild(animeCard);
+          });
+        }
+        
+        // Show most recently added items in second section (last 4 weeks)
+        if (recentGrid && watchlist.length > 0) {
+          recentGrid.innerHTML = '';
+          const fourWeeksAgo = new Date(Date.now() - (28 * 24 * 60 * 60 * 1000)).toISOString();
+          const recentItems = watchlist.filter(item => item.added_at > fourWeeksAgo);
+          
+          if (recentItems.length > 0) {
+            recentItems.forEach(item => {
+              const animeCard = createWatchlistCard(item);
+              recentGrid.appendChild(animeCard);
+            });
+          } else {
+            recentGrid.innerHTML = `
+              <div class="error-state">
+                <i class="fas fa-clock"></i>
+                <p>No items added recently</p>
+              </div>
+            `;
+          }
+        }
+      } catch (error) {
+        console.error("Error fetching watchlist:", error);
         if (trendingGrid) {
           trendingGrid.innerHTML = `
             <div class="error-state">
-              <i class="fas fa-list"></i>
-              <p>Your watchlist is empty</p>
-              <p>Add anime to your watchlist by clicking the "Add to List" button</p>
-              <button onclick="filterAnimeByCategory('Home')" class="retry-btn">
-                <i class="fas fa-home"></i> Explore Anime
+              <i class="fas fa-exclamation-circle"></i>
+              <p>Failed to load watchlist</p>
+              <button onclick="showWatchlist()" class="retry-btn">
+                <i class="fas fa-redo"></i> Retry
               </button>
             </div>
           `;
         }
-        return;
       }
-      
-      // Sort by added date (newest first)
-      watchlist.sort((a, b) => b.addedAt - a.addedAt);
-      
-      if (trendingGrid) {
-        trendingGrid.innerHTML = '';
-        // Display all watchlist items
-        watchlist.forEach(item => {
-          const animeCard = createWatchlistCard(item);
-          trendingGrid.appendChild(animeCard);
-        });
-      }
-      
-      // Show most recently added items in second section (last 4 weeks)
-      if (recentGrid && watchlist.length > 0) {
-        recentGrid.innerHTML = '';
-        const fourWeeksAgo = Date.now() - (28 * 24 * 60 * 60 * 1000);
-        const recentItems = watchlist.filter(item => item.addedAt > fourWeeksAgo);
-        
-        if (recentItems.length > 0) {
-          recentItems.forEach(item => {
-            const animeCard = createWatchlistCard(item);
-            recentGrid.appendChild(animeCard);
-          });
-        } else {
-          recentGrid.innerHTML = `
-            <div class="error-state">
-              <i class="fas fa-clock"></i>
-              <p>No items added recently</p>
-            </div>
-          `;
-        }
-      }
-    })
-    .catch((error) => {
-      console.error("Error fetching watchlist:", error);
-      if (trendingGrid) {
-        trendingGrid.innerHTML = `
-          <div class="error-state">
-            <i class="fas fa-exclamation-circle"></i>
-            <p>Failed to load watchlist</p>
-            <button onclick="showWatchlist()" class="retry-btn">
-              <i class="fas fa-redo"></i> Retry
-            </button>
-          </div>
-        `;
-      }
-    });
+  });
 }
 
 // Create a watchlist card
 function createWatchlistCard(item) {
   const card = document.createElement('div');
   card.className = 'anime-card';
-  card.dataset.animeId = item.id;
+  card.dataset.animeId = item.anime_id;
   
   card.innerHTML = `
-    <img src="${item.image || 'https://via.placeholder.com/250x350?text=No+Image'}" alt="${item.title}" 
-         onerror="this.src='https://via.placeholder.com/250x350?text=No+Image'" loading="lazy">
+    <img src="${item.image_url || 'https://via.placeholder.com/250x350?text=No+Image'}" alt="${item.title}" 
+         onerror="this.onerror=null; this.src='https://via.placeholder.com/250x350?text=No+Image'" loading="lazy">
     <div class="anime-card-content">
       <h3>${item.title}</h3>
       <div class="meta">
-        <span>${new Date(item.addedAt).toLocaleDateString()}</span>
+        <span>${new Date(item.added_at).toLocaleDateString()}</span>
       </div>
       <div class="watchlist-actions" style="margin-top: 10px; display: flex; gap: 5px;">
         <button class="watch-btn" style="flex: 1; padding: 8px; font-size: 0.9rem;" 
-                onclick="initializeVideoPlayer({
-                  id: '${item.id}',
-                  title: '${item.title.replace(/'/g, "\\'")}',
-                  episodes: 12,
-                  image: '${item.image}'
-                });
-              ">
+                onclick="
+                  document.querySelectorAll('.anime-details-modal').forEach(modal => {
+                    modal.classList.remove('show');
+                    setTimeout(() => modal.remove(), 100);
+                  });
+                  initializeVideoPlayer({
+                    id: '${item.anime_id}',
+                    title: '${item.title.replace(/'/g, "\\'")}',
+                    episodes: 12,
+                    image: '${item.image_url}'
+                  });
+                ">
           <i class="fas fa-play"></i> Watch
         </button>
         <button class="remove-btn" style="flex: 1; padding: 8px; font-size: 0.9rem; background: var(--secondary-color);" 
-                onclick="event.stopPropagation(); addToWatchlist('${item.id}')">
+                onclick="event.stopPropagation(); addToWatchlist('${item.anime_id}')">
           <i class="fas fa-trash"></i> Remove
         </button>
       </div>
@@ -3083,9 +3205,9 @@ function createWatchlistCard(item) {
     if (!e.target.closest('button')) {
       // Only trigger if not clicking on a button
       showAnimeDetails({
-        id: item.id,
+        id: item.anime_id,
         title: item.title,
-        image: item.image,
+        image: item.image_url,
         episodes: 12 // Default episodes count
       });
     }
@@ -3096,19 +3218,30 @@ function createWatchlistCard(item) {
 
 // Function to check if anime is in watchlist and update UI
 function checkWatchlistStatus(animeId) {
-  const user = firebase.auth().currentUser;
-  if (!user) return Promise.resolve(false);
-  
-  return firebase.database().ref(`users/${user.uid}/watchlist/${animeId}`).once('value')
-    .then(snapshot => {
-      const isInWatchlist = snapshot.exists();
+  return window.supabase.auth.getSession().then(async ({ data: { session } }) => {
+    const user = session?.user;
+    if (!user) return Promise.resolve(false);
+    
+    try {
+      const { data: watchlistItem, error } = await window.supabase
+        .from('watchlist')
+        .select('id')
+        .eq('user_id', user.id)
+        .eq('anime_id', animeId)
+        .single();
+
+      if (error && error.code !== 'PGRST116') {
+        throw error;
+      }
+
+      const isInWatchlist = !!watchlistItem;
       updateWatchlistButtons(animeId, isInWatchlist);
       return isInWatchlist;
-    })
-    .catch(error => {
+    } catch (error) {
       console.error("Error checking watchlist status:", error);
       return false;
-    });
+    }
+  });
 }
 
 // Share anime function
@@ -3477,3 +3610,515 @@ document.getElementById('search').addEventListener('keydown', function(e) {
       break;
   }
 });
+
+// Enhanced UX features and quality-of-life improvements
+document.addEventListener('DOMContentLoaded', () => {
+  // Initialize UX enhancements
+  initializeKeyboardShortcuts();
+  initializeScrollToTop();
+  initializeToastSystem();
+  initializeSearchHistory();
+  initializeLoadingStates();
+  initializeAccessibilityFeatures();
+  
+  // PWA functionality
+  initializePWA();
+  
+  // ...existing initialization code...
+});
+
+// Toast notification system
+function showToast(message, type = 'info', duration = 5000) {
+  const toastContainer = document.getElementById('toastContainer');
+  if (!toastContainer) return;
+  
+  const toast = document.createElement('div');
+  toast.className = `toast ${type}`;
+  toast.innerHTML = `
+    <span>${message}</span>
+    <button class="toast-close" onclick="this.parentElement.remove()">&times;</button>
+  `;
+  
+  toastContainer.appendChild(toast);
+  
+  // Show toast with animation
+  setTimeout(() => toast.classList.add('show'), 100);
+  
+  // Auto remove after duration
+  setTimeout(() => {
+    toast.classList.remove('show');
+    setTimeout(() => toast.remove(), 300);
+  }, duration);
+}
+
+// Enhanced loading overlay
+function showLoadingOverlay(message = 'Loading...') {
+  const overlay = document.getElementById('loadingOverlay');
+  if (overlay) {
+    overlay.querySelector('p').textContent = message;
+    overlay.classList.add('show');
+  }
+}
+
+function hideLoadingOverlay() {
+  const overlay = document.getElementById('loadingOverlay');
+  if (overlay) {
+    overlay.classList.remove('show');
+  }
+}
+
+// Keyboard shortcuts system
+function initializeKeyboardShortcuts() {
+  document.addEventListener('keydown', (e) => {
+    // Don't trigger shortcuts when typing in inputs
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') {
+      // Allow Esc to blur inputs
+      if (e.key === 'Escape') {
+        e.target.blur();
+      }
+      return;
+    }
+    
+    switch(true) {
+      case e.ctrlKey && e.key === 'k':
+        e.preventDefault();
+        document.getElementById('search').focus();
+        break;
+        
+      case e.ctrlKey && e.key === 'h':
+        e.preventDefault();
+        filterAnimeByCategory('Home');
+        break;
+        
+      case e.ctrlKey && e.key === ',':
+        e.preventDefault();
+        const settingsModal = document.getElementById('settingsModal');
+        if (settingsModal) settingsModal.classList.add('show');
+        break;
+        
+      case e.ctrlKey && e.key === 'Enter':
+        e.preventDefault();
+        const chatHeader = document.querySelector('.chat-header');
+        if (chatHeader) chatHeader.click();
+        break;
+        
+      case e.key === '?':
+        e.preventDefault();
+        document.getElementById('shortcutsModal').style.display = 'flex';
+        break;
+        
+      case e.key === 'Escape':
+        // Close any open modals
+        document.querySelectorAll('.modal.show, .anime-details-modal.show').forEach(modal => {
+          modal.classList.remove('show');
+          setTimeout(() => {
+            if (modal.classList.contains('anime-details-modal')) {
+              modal.remove();
+            } else {
+              modal.style.display = 'none';
+            }
+          }, 300);
+        });
+        document.getElementById('shortcutsModal').style.display = 'none';
+        break;
+    }
+  });
+}
+
+// Scroll to top functionality
+function initializeScrollToTop() {
+  const scrollBtn = document.getElementById('scrollToTop');
+  if (!scrollBtn) return;
+  
+  window.addEventListener('scroll', () => {
+    if (window.pageYOffset > 300) {
+      scrollBtn.classList.add('show');
+    } else {
+      scrollBtn.classList.remove('show');
+    }
+  });
+  
+  scrollBtn.addEventListener('click', () => {
+    window.scrollTo({
+      top: 0,
+      behavior: 'smooth'
+    });
+  });
+}
+
+// Toast system initialization
+function initializeToastSystem() {
+  // Override alert function to use toasts
+  window.originalAlert = window.alert;
+  window.alert = function(message) {
+    showToast(message, 'info');
+  };
+  
+  // Remove buggy override of addToWatchlist to keep the correct implementation
+  // const originalAddToWatchlist = window.addToWatchlist;
+  // window.addToWatchlist = function(animeId) {
+  //   const user = window.supabase.auth.getUser().then(({ data: { user } }) => user);
+  //   if (!user) {
+  //     showToast('Please sign in to manage your watchlist', 'warning');
+  //     const authModal = document.getElementById('authModal');
+  //     if (authModal) {
+  //       authModal.style.display = 'flex';
+  //       authModal.classList.add('show');
+  //     }
+  //     return;
+  //   }
+  //   ...
+  // };
+}
+
+// Search history functionality
+function initializeSearchHistory() {
+  const searchInput = document.getElementById('search');
+  const searchDropdown = document.querySelector('.search-results-dropdown');
+  
+  if (!searchInput || !searchDropdown) return;
+  
+  let searchHistory = JSON.parse(localStorage.getItem('searchHistory') || '[]');
+  
+  // Save search to history
+  function saveSearch(query) {
+    if (!query || query.length < 2) return;
+    
+    // Remove if already exists and add to front
+    searchHistory = searchHistory.filter(item => item !== query);
+    searchHistory.unshift(query);
+    
+    // Keep only last 10 searches
+    searchHistory = searchHistory.slice(0, 10);
+    localStorage.setItem('searchHistory', JSON.stringify(searchHistory));
+  }
+  
+  // Show search history when focusing empty search
+  searchInput.addEventListener('focus', () => {
+    if (!searchInput.value.trim() && searchHistory.length > 0) {
+      showSearchHistory();
+    }
+  });
+  
+  function showSearchHistory() {
+    searchDropdown.innerHTML = `
+      <div class="search-history">
+        <div class="search-history-title">Recent Searches</div>
+        ${searchHistory.map(query => `
+          <div class="search-history-item" data-query="${query}">
+            <span>${query}</span>
+            <button class="search-history-clear" data-query="${query}">&times;</button>
+          </div>
+        `).join('')}
+        <button class="search-history-clear" onclick="clearSearchHistory()" 
+                style="width: 100%; margin-top: 5px; padding: 5px; border: none; background: var(--background-color); color: var(--text-secondary); border-radius: 4px;">
+          Clear All
+        </button>
+      </div>
+    `;
+    
+    searchDropdown.style.display = 'block';
+    
+    // Add click handlers
+    searchDropdown.querySelectorAll('.search-history-item').forEach(item => {
+      item.addEventListener('click', (e) => {
+        if (e.target.classList.contains('search-history-clear')) {
+          e.stopPropagation();
+          const query = e.target.dataset.query;
+          removeFromSearchHistory(query);
+          return;
+        }
+        
+        const query = item.dataset.query;
+        searchInput.value = query;
+        searchInput.dispatchEvent(new Event('input'));
+      });
+    });
+  }
+  
+  function removeFromSearchHistory(query) {
+    searchHistory = searchHistory.filter(item => item !== query);
+    localStorage.setItem('searchHistory', JSON.stringify(searchHistory));
+    if (searchHistory.length > 0) {
+      showSearchHistory();
+    } else {
+      searchDropdown.style.display = 'none';
+    }
+  }
+  
+  window.clearSearchHistory = function() {
+    searchHistory = [];
+    localStorage.removeItem('searchHistory');
+    searchDropdown.style.display = 'none';
+  };
+  
+  // Save search when clicking on search results
+  const originalShowAnimeDetails = window.showAnimeDetails;
+  window.showAnimeDetails = function(...args) {
+    const query = searchInput.value.trim();
+    if (query) {
+      saveSearch(query);
+    }
+    return originalShowAnimeDetails.apply(this, args);
+  };
+}
+
+// Enhanced loading states
+function initializeLoadingStates() {
+  // Override fetchFromAniList to show loading for major operations
+  const originalFetch = window.fetchFromAniList || fetchFromAniList;
+  window.fetchFromAniList = async function(query, variables, cacheKey) {
+    // Show loading for expensive operations
+    if (query.includes('DETAILED_ANIME_QUERY') || query.includes('SEARCH_QUERY')) {
+      showLoadingOverlay('Loading anime details...');
+    }
+    
+    try {
+      const result = await originalFetch(query, variables, cacheKey);
+      return result;
+    } finally {
+      hideLoadingOverlay();
+    }
+  };
+  
+  // Add skeleton loading for anime grids
+  function showSkeletonLoading(gridElement) {
+    if (!gridElement) return;
+    
+    const skeletonCards = Array.from({length: 8}, () => `
+      <div class="anime-card skeleton-loading">
+        <div style="height: 250px; background: var(--surface-color);"></div>
+        <div class="anime-card-content">
+          <div style="height: 20px; background: var(--surface-color); margin-bottom: 10px; border-radius: 4px;"></div>
+          <div style="height: 16px; background: var(--surface-color); width: 60%; border-radius: 4px;"></div>
+        </div>
+      </div>
+    `).join('');
+    
+    gridElement.innerHTML = skeletonCards;
+  }
+  
+  // Use skeleton loading in filter function
+  const originalFilter = window.filterAnimeByCategory;
+  window.filterAnimeByCategory = async function(category) {
+    const trendingGrid = document.getElementById('trending-grid');
+    const recentGrid = document.getElementById('recent-grid');
+    
+    showSkeletonLoading(trendingGrid);
+    showSkeletonLoading(recentGrid);
+    
+    return originalFilter(category);
+  };
+}
+
+// Accessibility features
+function initializeAccessibilityFeatures() {
+  // Add focus management for modals
+  document.addEventListener('keydown', (e) => {
+    const activeModal = document.querySelector('.modal.show, .anime-details-modal.show');
+    if (activeModal && e.key === 'Tab') {
+      trapFocus(e, activeModal);
+    }
+  });
+  
+  function trapFocus(e, modal) {
+    const focusableElements = modal.querySelectorAll(
+      'button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])'
+    );
+    
+    const firstFocusable = focusableElements[0];
+    const lastFocusable = focusableElements[focusableElements.length - 1];
+    
+    if (e.shiftKey) {
+      if (document.activeElement === firstFocusable) {
+        e.preventDefault();
+        lastFocusable.focus();
+      }
+    } else {
+      if (document.activeElement === lastFocusable) {
+        e.preventDefault();
+        firstFocusable.focus();
+      }
+    }
+  }
+  
+  // Add ARIA labels to interactive elements
+  document.querySelectorAll('.anime-card').forEach((card, index) => {
+    card.setAttribute('role', 'button');
+    card.setAttribute('tabindex', '0');
+    card.setAttribute('aria-label', `View details for ${card.querySelector('h3')?.textContent || 'anime'}`);
+    
+    // Add keyboard support
+    card.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        card.click();
+      }
+    });
+  });
+  
+  // Announce page changes to screen readers
+  const announcer = document.createElement('div');
+  announcer.setAttribute('aria-live', 'polite');
+  announcer.setAttribute('aria-atomic', 'true');
+  announcer.className = 'sr-only';
+  announcer.style.cssText = 'position: absolute; left: -10000px; width: 1px; height: 1px; overflow: hidden;';
+  document.body.appendChild(announcer);
+  
+  window.announceToScreenReader = function(message) {
+    announcer.textContent = message;
+    setTimeout(() => announcer.textContent = '', 1000);
+  };
+}
+
+// Auto-save functionality
+function showAutoSaveIndicator() {
+  const indicator = document.getElementById('autoSaveIndicator');
+  if (indicator) {
+    indicator.classList.add('show');
+    setTimeout(() => indicator.classList.remove('show'), 2000);
+  }
+}
+
+// Enhanced error handling with user-friendly messages
+function handleError(error, userMessage = 'Something went wrong') {
+  console.error('Application error:', error);
+  showToast(userMessage, 'error');
+  
+  // Log to analytics if available
+  if (window.gtag) {
+    gtag('event', 'exception', {
+      'description': error.toString(),
+      'fatal': false
+    });
+  }
+}
+
+// Performance monitoring
+function initializePerformanceMonitoring() {
+  // Monitor long tasks
+  if ('PerformanceObserver' in window) {
+    const observer = new PerformanceObserver((list) => {
+      for (const entry of list.getEntries()) {
+        if (entry.duration > 100) {
+          console.warn('Long task detected:', entry.duration + 'ms');
+        }
+      }
+    });
+    observer.observe({entryTypes: ['longtask']});
+  }
+  
+  // Monitor memory usage
+  if (performance.memory) {
+    setInterval(() => {
+      const memInfo = performance.memory;
+      if (memInfo.usedJSHeapSize > memInfo.jsHeapSizeLimit * 0.9) {
+        console.warn('High memory usage detected');
+        cleanupCache(); // Clean cache if memory is high
+      }
+    }, 30000);
+  }
+}
+
+// PWA initialization and functionality
+function initializePWA() {
+  // Check online/offline status
+  function updateOnlineStatus() {
+    const offlineIndicator = document.querySelector('.offline-indicator') || createOfflineIndicator();
+    if (navigator.onLine) {
+      offlineIndicator.classList.remove('show');
+      offlineIndicator.style.display = 'none';
+      console.log('App is online');
+    } else {
+      offlineIndicator.style.display = 'block';
+      offlineIndicator.classList.add('show');
+      console.log('App is offline');
+      showToast('You are offline. Some features may not work.', 'warning');
+    }
+  }
+  
+  function createOfflineIndicator() {
+    const indicator = document.createElement('div');
+    indicator.className = 'offline-indicator';
+    indicator.innerHTML = '⚡ You are offline - Some features may not work';
+    document.body.appendChild(indicator);
+    // Hide by default; only show when truly offline
+    indicator.style.display = 'none';
+    return indicator;
+  }
+
+  // Listen for online/offline events
+  window.addEventListener('online', () => updateOnlineStatus());
+  window.addEventListener('offline', () => updateOnlineStatus());
+  
+  // Initial status check
+  updateOnlineStatus();
+
+  // Add to home screen detection (iOS Safari)
+  if (window.navigator.standalone === false && /iPad|iPhone|iPod/.test(navigator.userAgent)) {
+    setTimeout(() => {
+      if (!localStorage.getItem('ios-install-dismissed')) {
+        showIOSInstallPrompt();
+      }
+    }, 15000);
+  }
+
+  function showIOSInstallPrompt() {
+    const prompt = document.createElement('div');
+    prompt.className = 'pwa-ios-install';
+    prompt.innerHTML = `
+      <p>
+        <i class="fas fa-mobile-alt ios-install-icon"></i>
+        Install AnimeRealm: Tap <i class="fas fa-share"></i> then "Add to Home Screen"
+      </p>
+      <button onclick="this.parentElement.remove(); localStorage.setItem('ios-install-dismissed', 'true');" 
+              style="background: var(--primary-color); color: white; border: none; padding: 0.5rem 1rem; border-radius: 6px;">
+        Got it!
+      </button>
+    `;
+    document.body.appendChild(prompt);
+    setTimeout(() => prompt.classList.add('show'), 100);
+    
+    // Auto-hide after 10 seconds
+    setTimeout(() => {
+      prompt.remove();
+      localStorage.setItem('ios-install-dismissed', 'true');
+    }, 10000);
+  }
+
+  // Background sync registration
+  if ('serviceWorker' in navigator && 'sync' in window.ServiceWorkerRegistration.prototype) {
+    navigator.serviceWorker.ready.then((registration) => {
+      // Register for background sync
+      return registration.sync.register('background-sync');
+    }).catch((error) => {
+      console.log('Background sync registration failed:', error);
+    });
+  }
+
+  // Store failed actions for retry when online
+  window.storePendingAction = function(action) {
+    if (!navigator.onLine) {
+      const pendingActions = JSON.parse(localStorage.getItem('pendingActions') || '[]');
+      pendingActions.push({
+        ...action,
+        timestamp: Date.now(),
+        id: Math.random().toString(36).substr(2, 9)
+      });
+      localStorage.setItem('pendingActions', JSON.stringify(pendingActions));
+      showToast('Action saved. Will sync when online.', 'info');
+    }
+  };
+
+  // Clear pending actions when online
+  window.addEventListener('online', () => {
+    const pendingActions = JSON.parse(localStorage.getItem('pendingActions') || '[]');
+    if (pendingActions.length > 0) {
+      showToast(`Syncing ${pendingActions.length} pending actions...`, 'info');
+      // Service worker will handle the actual sync
+    }
+  });
+}
+
+// Initialize performance monitoring
+initializePerformanceMonitoring();
