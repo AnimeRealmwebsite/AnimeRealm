@@ -5,40 +5,6 @@ const RETRY_DELAY = 1000; // 1 second
 // Clear console at startup
 console.clear();
 
-// Set up console clear interceptor
-const originalConsoleLog = console.log;
-const originalConsoleError = console.error;
-const originalConsoleWarn = console.warn;
-
-// Throttled console clear to avoid clearing too frequently
-let lastClear = Date.now();
-const CLEAR_INTERVAL = 3000; // Clear every 3 seconds at most
-
-// Override console methods
-console.log = function() {
-  if (Date.now() - lastClear > CLEAR_INTERVAL) {
-    console.clear();
-    lastClear = Date.now();
-  }
-  originalConsoleLog.apply(console, arguments);
-};
-
-console.error = function() {
-  if (Date.now() - lastClear > CLEAR_INTERVAL) {
-    console.clear();
-    lastClear = Date.now();
-  }
-  originalConsoleError.apply(console, arguments);
-};
-
-console.warn = function() {
-  if (Date.now() - lastClear > CLEAR_INTERVAL) {
-    console.clear();
-    lastClear = Date.now();
-  }
-  originalConsoleWarn.apply(console, arguments);
-};
-
 // AniList API endpoint
 const ANILIST_API = 'https://graphql.anilist.co';
 
@@ -618,8 +584,7 @@ async function fetchFromAniList(query, variables = {}, cacheKey = null) {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Accept': 'application/json',
-          'Accept-Encoding': 'gzip, deflate, br'
+          'Accept': 'application/json'
         },
         body: JSON.stringify({
           query: query,
@@ -737,7 +702,7 @@ window.fetchFromAniList = window.fetchFromAniList || fetchFromAniList;
 // Enhanced initializeAnimeData with parallel loading and fallbacks
 async function initializeAnimeData() {
   // Prevent home refresh when watchlist is active
-  if (window.currentView === 'watchlist') return;
+  if ((window.AppStore?.getState().view.currentView) === 'watchlist') return;
   
   try {
     // Show loading state in UI
@@ -1090,10 +1055,10 @@ window.showAnimeDetails = async function(anime) {
         });
       
       // Race between API call and timeout
-      media = await Promise.race([fetchPromise, timeoutPromise]);
-      
-      if (media?.Media) {
-        cache.detailedAnime.set(anime.id, { Media: media });
+      let fetched = await Promise.race([fetchPromise, timeoutPromise]);
+      if (fetched?.Media) {
+        cache.detailedAnime.set(anime.id, fetched);
+        media = fetched.Media;
       }
     }
 
@@ -1448,7 +1413,7 @@ window.showAnimeDetails = async function(anime) {
                     setTimeout(() => modal.remove(), 100);
                   });
                   initializeVideoPlayer({
-                    id: '${media.id}',
+                    id: '${anime.id}',
                     title: '${anime.title ? anime.title.replace(/'/g, "\\'") : 'Unknown Anime'}',
                     episodes: ${anime.episodes || 1},
                     image: '${anime.image || ''}'
@@ -1666,7 +1631,7 @@ async function filterAnimeByCategory(category) {
   // Normalize input (small fix)
   const normalizedCategory = category.toLowerCase().replace(/\s+/g, '');
   // Update current view (avoid 'watchlist' since this is category-based)
-  window.currentView = normalizedCategory === 'home' ? 'home' : normalizedCategory;
+  window.AppStore?.setCurrentView(normalizedCategory === 'home' ? 'home' : normalizedCategory);
 
   // Update nav links active state
   const navLinks = document.querySelectorAll('.nav-links a');
@@ -1873,8 +1838,22 @@ document.getElementById('search').addEventListener('keypress', (e) => {
     const event = new Event('input');
     document.getElementById('search').dispatchEvent(event);
     document.getElementById('search').blur(); // Remove focus from search input
+    const dr = ensureSearchDropdown(); if (dr) dr.style.display = 'none';
   }
 });
+
+// Helper to ensure the search dropdown exists before first use
+function ensureSearchDropdown() {
+  if (window.searchResultsDropdown && document.body.contains(window.searchResultsDropdown)) return window.searchResultsDropdown;
+  const bar = document.querySelector('.search-bar');
+  if (!bar) return null;
+  const el = document.createElement('div');
+  el.className = 'search-results-dropdown';
+  el.style.display = 'none';
+  bar.appendChild(el);
+  window.searchResultsDropdown = el;
+  return el;
+}
 
 // Update the nav links click handlers in the DOMContentLoaded event
 document.addEventListener('DOMContentLoaded', () => {
@@ -2012,13 +1991,7 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // Sign out handler
-  if (typeof window.signOut !== 'function') {
-    window.signOut = async function(event) {
-      if (event?.preventDefault) event.preventDefault();
-      return (await (window.signOut?.(event)));
-    };
-  }
-
+  // Remove broken signOut override; auth.js provides the global signOut
   // Settings modal handler
   const settingsBtn = document.getElementById('openSettings');
   const settingsModal = document.getElementById('settingsModal');
@@ -2656,7 +2629,7 @@ async function loadSeasonalAnime() {
 
 // Function to return to home page
 function returnToHome() {
-  window.currentView = 'home';
+  window.AppStore?.setCurrentView('home');
   filterAnimeByCategory('Home');
 }
 
@@ -2738,7 +2711,7 @@ document.getElementById('search').addEventListener('input', debounce(async funct
     if (trendingHeading) trendingHeading.textContent = '🔥 Trending Now';
     if (recentHeading) recentHeading.textContent = '📺 Recently Updated';
     initializeAnimeData();
-    searchResultsDropdown.style.display = 'none';
+    const dr = ensureSearchDropdown(); if (dr) dr.style.display = 'none';
     return;
   }
 
@@ -2945,15 +2918,11 @@ document.getElementById('search').addEventListener('input', debounce(async funct
 
 // Add Enter key handler for search
 document.getElementById('search').addEventListener('keypress', (e) => {
-  if (e.key === 'Enter') {
-    const searchTerm = e.target.value.trim();
-    if (searchTerm.length > 0) {
-      e.target.blur(); // Remove focus from search input
-      searchResultsDropdown.style.display = 'none'; // Hide dropdown
-      // Trigger search
-      const event = new Event('input');
-      e.target.dispatchEvent(event);
-    }
+  if (e.key === 'Enter' && document.getElementById('search').value.trim().length > 0) {
+    const event = new Event('input');
+    document.getElementById('search').dispatchEvent(event);
+    document.getElementById('search').blur();
+    const dr = ensureSearchDropdown(); if (dr) dr.style.display = 'none';
   }
 });
 
@@ -3062,7 +3031,7 @@ function updateWatchlistButtons(animeId, isInWatchlist) {
 // Show watchlist function
 function showWatchlist() {
   // Lock view to watchlist so home refresh doesn't override
-  window.currentView = 'watchlist';
+  window.AppStore?.setCurrentView('watchlist');
   
   window.supabase.auth.getSession().then(async ({ data: { session } }) => {
     const user = session?.user;
@@ -3309,10 +3278,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
 // Create and inject search results dropdown container
 const searchBar = document.querySelector('.search-bar');
-const searchResultsDropdown = document.createElement('div');
-searchResultsDropdown.className = 'search-results-dropdown';
-searchResultsDropdown.style.display = 'none';
-searchBar.appendChild(searchResultsDropdown);
+const searchResultsDropdown = ensureSearchDropdown();
 
 // Add styles for the search results dropdown
 const searchStyles = document.createElement('style');

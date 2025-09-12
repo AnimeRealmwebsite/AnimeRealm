@@ -12,10 +12,7 @@ const STATIC_FILES = [
   '/chat.js',
   '/profile.js',
   '/supabaseConfig.js',
-  '/manifest.json',
-  'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css',
-  'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2',
-  'https://cdn.jsdelivr.net/npm/idb@7/build/umd.js'
+  '/manifest.json'
 ];
 
 // Files to cache dynamically (API responses, images)

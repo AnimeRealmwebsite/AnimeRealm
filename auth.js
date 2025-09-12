@@ -10,6 +10,27 @@ document.addEventListener("DOMContentLoaded", () => {
   // Current user state
   let currentUser = null;
 
+  // Username policy: only alphanumeric and underscores, 3–20 chars
+  const USERNAME_REGEX = /^[a-zA-Z0-9_]{3,20}$/;
+  const sanitizeUsername = (raw, fallbackSeed = '') => {
+    if (!raw) raw = '';
+    let u = String(raw).replace(/[^a-zA-Z0-9_]/g, '_').replace(/_+/g, '_').replace(/^_+|_+$/g, '');
+    if (u.length > 20) u = u.slice(0, 20);
+    if (u.length < 3) {
+      const pad = (fallbackSeed || Math.random().toString(36).slice(2)).replace(/[^a-zA-Z0-9]/g, '').slice(0, 6) || 'usr';
+      u = (u || 'user') + '_' + pad;
+      u = u.slice(0, 20);
+    }
+    return u;
+  };
+  const getValidUsername = (user) => {
+    const seed = user?.id || '';
+    const meta = user?.user_metadata?.username;
+    const fromEmail = (user?.email || '').split('@')[0] || 'user';
+    const candidate = meta && USERNAME_REGEX.test(meta) ? meta : sanitizeUsername(meta || fromEmail, seed);
+    return USERNAME_REGEX.test(candidate) ? candidate : sanitizeUsername(candidate, seed);
+  };
+
   // Enhanced password reset functionality
   async function resetPassword(email) {
     try {
@@ -179,7 +200,8 @@ document.addEventListener("DOMContentLoaded", () => {
         password: password,
         options: {
           data: {
-            username: email.split('@')[0]
+            // enforce username policy at signup
+            username: sanitizeUsername(email.split('@')[0])
           }
         }
       });
@@ -235,7 +257,7 @@ document.addEventListener("DOMContentLoaded", () => {
         const profileData = {
           id: user.id,
           email: user.email,
-          username: user.user_metadata?.username || user.email.split('@')[0],
+          username: getValidUsername(user),
           avatar_url: getProviderAvatar(user) || `https://api.dicebear.com/7.x/avataaars/svg?seed=${user.id}`,
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString()
@@ -315,7 +337,7 @@ document.addEventListener("DOMContentLoaded", () => {
       if (error.message.includes('Current password is incorrect')) {
         errorMessage += 'Current password is incorrect.';
       } else if (error.message.includes('Password should be')) {
-        errorMessage += 'New password must be at least 6 characters long.';
+        errorMessage += 'New password must be at least 8 characters long.';
       } else {
         errorMessage += error.message || 'Please try again.';
       }
@@ -378,6 +400,10 @@ document.addEventListener("DOMContentLoaded", () => {
   // Update user profile in Supabase
   async function updateUserProfile(userId, updates) {
     try {
+      // normalize username if provided
+      if (typeof updates?.username === 'string') {
+        updates.username = sanitizeUsername(updates.username);
+      }
       // Add updated_at timestamp
       const profileUpdates = {
         ...updates,
@@ -471,7 +497,7 @@ document.addEventListener("DOMContentLoaded", () => {
           console.error('Failed to create default profile:', error);
           // Use fallback data from user metadata
           profileData = {
-            username: user.user_metadata?.username || user.email.split('@')[0],
+            username: getValidUsername(user),
             avatar_url: getProviderAvatar(user) || `https://api.dicebear.com/7.x/avataaars/svg?seed=${user.id}`
           };
         }
@@ -574,18 +600,24 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Listen for auth state changes
   supabase.auth.onAuthStateChange(async (event, session) => {
+    // throttle duplicate triggers within 500ms
+    if (window.__authLastRun && Date.now() - window.__authLastRun < 500) return;
+    window.__authLastRun = Date.now();
     console.log('Auth state changed:', event, session?.user?.id);
     
     if (event === 'SIGNED_IN' && session?.user) {
       currentUser = session.user;
+      window.AppStore?.setUser(session.user);
       await updateHeaderUI(session.user);
       // Trigger profile loading event for other components
       window.dispatchEvent(new CustomEvent('profileLoaded', { detail: { user: session.user } }));
     } else if (event === 'SIGNED_OUT') {
       currentUser = null;
+      window.AppStore?.setUser(null);
       await updateHeaderUI(null);
     } else if (event === 'TOKEN_REFRESHED' && session?.user) {
       currentUser = session.user;
+      window.AppStore?.setUser(session.user);
       // Ensure UI is updated after token refresh
       await updateHeaderUI(session.user);
     }
@@ -599,11 +631,13 @@ document.addEventListener("DOMContentLoaded", () => {
       
       if (session?.user) {
         currentUser = session.user;
+        window.AppStore?.setUser(session.user);
         await updateHeaderUI(session.user);
         // Trigger profile loading event for other components
         window.dispatchEvent(new CustomEvent('profileLoaded', { detail: { user: session.user } }));
       } else {
         currentUser = null;
+        window.AppStore?.setUser(null);
         await updateHeaderUI(null);
       }
     } catch (error) {
@@ -614,6 +648,7 @@ document.addEventListener("DOMContentLoaded", () => {
           const { data: { session } } = await supabase.auth.getSession();
           if (session?.user) {
             currentUser = session.user;
+            window.AppStore?.setUser(session.user);
             await updateHeaderUI(session.user);
             window.dispatchEvent(new CustomEvent('profileLoaded', { detail: { user: session.user } }));
           }
@@ -625,6 +660,13 @@ document.addEventListener("DOMContentLoaded", () => {
   };
 
   initializeAuth();
+
+  // Re-run auth initialization on pageshow (OAuth redirect/bfcache) to ensure UI hydrates
+  window.addEventListener('pageshow', () => {
+    // run immediately and once more after a short delay to catch session restoration
+    initializeAuth();
+    setTimeout(initializeAuth, 800);
+  });
 
   // Password Reset handler
   if (passwordResetLink) {
