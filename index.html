@@ -31,9 +31,6 @@
   <link rel="stylesheet" href="style.css">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
   
-  <!-- Add global store early -->
-  <script defer src="store.js"></script>
-  
   <!-- Add Supabase SDK -->
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 
@@ -1005,15 +1002,8 @@
           <div id="artplayer-container" style="width: 100%; height: 100%; background: #000;"></div>
         </div>
       </div>
-      <div class="video-comments-section">
-        <h3>Comments</h3>
-        <div class="comment-form">
-          <textarea id="commentInput" placeholder="Add a comment..."></textarea>
-          <button id="postComment">Post</button>
-        </div>
-        <div id="commentsList" class="comments-list">
-          <!-- Comments will be loaded here -->
-        </div>
+      <div id="serverSection" class="server-section">
+        <!-- Server controls will be rendered here -->
       </div>
     </div>
   </div>
@@ -1285,41 +1275,6 @@
       }
     });
   
-    function navigateSection(section) {
-      // First update the nav links active state
-      const navLinks = document.querySelectorAll('.nav-links a');
-      navLinks.forEach(link => {
-        link.classList.remove('active');
-        if (link.textContent === section) {
-          link.classList.add('active');
-        }
-      });
-
-      // Check for special sections
-      if (section === 'Watchlist') {
-        if (typeof showWatchlist === 'function') {
-          showWatchlist();
-        } else {
-          console.error('showWatchlist function not found');
-          alert('Watchlist feature coming soon!');
-          // Fallback to home
-          filterAnimeByCategory('Home');
-        }
-      } else {
-        // Filter content for standard sections
-        filterAnimeByCategory(section);
-      }
-
-      // Smooth scroll to trending section
-      const trendingSection = document.querySelector('.trending');
-      if (trendingSection) {
-        window.scrollTo({
-          top: trendingSection.offsetTop - 100,
-          behavior: 'smooth'
-        });
-      }
-    }
-  
     // Define showWatchlist if it doesn't exist
     if (typeof showWatchlist !== 'function') {
       window.showWatchlist = function() {
@@ -1405,91 +1360,55 @@
         if (closeVideoBtn && videoPlayerModal) {
           closeVideoBtn.addEventListener('click', () => {
             videoPlayerModal.classList.remove('show');
-            
-            // IMPORTANT: Force stop the video playback by completely replacing the iframe
-            const container = document.getElementById('artplayer-container');
-            if (container) {
-              // Remove all content including iframe
-              container.innerHTML = '';
-              
-              // Replace with empty div to maintain structure
-              const placeholder = document.createElement('div');
-              placeholder.style.width = '100%';
-              placeholder.style.height = '100%';
-              placeholder.style.background = '#000';
-              container.appendChild(placeholder);
-            }
-            
-            if (window.artPlayerInstance) {
-              try {
-                window.artPlayerInstance.destroy();
-                window.artPlayerInstance = null;
-              } catch(err) {
-                console.warn("Error destroying player:", err);
-              }
-            }
+            // stop playback and cleanup
+            window.stopCurrentPlayback && window.stopCurrentPlayback();
+            const vc = document.querySelector('.video-container');
+            if (vc) vc.innerHTML = '';
           });
           
           // Make outside click close video modal with the same cleanup
           videoPlayerModal.addEventListener('click', (e) => {
             if (e.target === videoPlayerModal) {
               videoPlayerModal.classList.remove('show');
-              
-              // IMPORTANT: Force stop the video playback by completely replacing the iframe
-              const container = document.getElementById('artplayer-container');
-              if (container) {
-                // Remove all content including iframe
-                container.innerHTML = '';
-                
-                // Replace with empty div to maintain structure
-                const placeholder = document.createElement('div');
-                placeholder.style.width = '100%';
-                placeholder.style.height = '100%';
-                placeholder.style.background = '#000';
-                container.appendChild(placeholder);
-              }
-              
-              if (window.artPlayerInstance) {
-                try {
-                  window.artPlayerInstance.destroy();
-                  window.artPlayerInstance = null;
-                } catch(err) {
-                  console.warn("Error destroying player:", err);
-                }
-              }
+              // stop playback and cleanup
+              window.stopCurrentPlayback && window.stopCurrentPlayback();
+              const vc = document.querySelector('.video-container');
+              if (vc) vc.innerHTML = '';
             }
           });
         }
         
-        // Add close functionality for auth modal
+        // Add close functionality for auth modal with cleanup
+        let authOutsideHandler = null;
+        const hideAuthModal = () => {
+          if (!authModal) return;
+          authModal.classList.remove('show');
+          setTimeout(() => { authModal.style.display = 'none'; }, 300);
+          if (authOutsideHandler) {
+            authModal.removeEventListener('click', authOutsideHandler);
+            authOutsideHandler = null;
+          }
+        };
         const authModalCloseBtn = authModal?.querySelector('.close');
         if (authModalCloseBtn) {
-          authModalCloseBtn.addEventListener('click', () => {
-            authModal.classList.remove('show');
-            setTimeout(() => {
-              authModal.style.display = 'none';
-            }, 300);
-          });
+          authModalCloseBtn.addEventListener('click', hideAuthModal);
         }
-        
-        // Close auth modal when clicking outside
+
         if (authModal) {
-          authModal.addEventListener('click', (e) => {
-            if (e.target === authModal) {
-              authModal.classList.remove('show');
-              setTimeout(() => {
-                authModal.style.display = 'none';
-              }, 300);
-            }
-          });
+          authOutsideHandler = (e) => { if (e.target === authModal) hideAuthModal(); };
+          authModal.addEventListener('click', authOutsideHandler);
         }
         
-        // Safely show auth modal
+        // Safely show auth modal (re-attach outside handler on show)
         if (authButton) {
           authButton.addEventListener('click', () => {
             if (authModal) {
               authModal.style.display = 'flex';
               authModal.classList.add('show');
+              if (!authOutsideHandler) {
+                authOutsideHandler = (e) => { if (e.target === authModal) hideAuthModal(); };
+                authModal.addEventListener('click', authOutsideHandler);
+              }
             }
           });
         }

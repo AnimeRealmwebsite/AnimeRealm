@@ -7,6 +7,7 @@ console.clear();
 
 // AniList API endpoint
 const ANILIST_API = 'https://graphql.anilist.co';
+const STREAM_BASE_URL = 'https://animerealm-backend.vercel.app';
 
 // Cache for storing fetched data
 const cache = {
@@ -600,17 +601,29 @@ async function fetchFromAniList(query, variables = {}, cacheKey = null) {
       clearTimeout(timeout);
 
       if (!response.ok) {
-        // Handle rate limits specially
         if (response.status === 429) {
           const retryAfter = response.headers.get('Retry-After');
           const waitTime = (retryAfter ? parseInt(retryAfter) : 60) * 1000;
           await new Promise(resolve => setTimeout(resolve, waitTime));
           throw new Error('Rate limited');
         }
-        throw new Error(`HTTP error! status: ${response.status}`);
+        const errText = await response.text().catch(() => '');
+        throw new Error(`HTTP ${response.status} ${response.statusText || ''} - ${errText?.slice(0, 200) || 'No body'}`);
       }
 
-      const data = await response.json();
+      // Robust JSON parse with fallback
+      const rawText = await response.text();
+      let data;
+      try {
+        data = JSON.parse(rawText);
+      } catch (e) {
+        throw new Error(`AniList JSON parse failed: ${e.message}. Snippet: ${rawText.slice(0, 200)}`);
+      }
+
+      // Handle GraphQL errors shape
+      if (data.errors && Array.isArray(data.errors) && data.errors.length) {
+        throw new Error(`AniList GraphQL error: ${data.errors.map(er => er.message).join('; ').slice(0, 200)}`);
+      }
 
       // Validate and sanitize response data
       if (!data || !data.data) {
@@ -645,7 +658,7 @@ async function fetchFromAniList(query, variables = {}, cacheKey = null) {
       attempts++;
 
       // Log the error for debugging
-      console.warn(`AniList fetch attempt ${attempts} failed:`, error);
+      console.warn(`AniList fetch attempt ${attempts} failed:`, error?.message || error);
 
       // Special handling for network errors
       if (error.name === 'TypeError' || error.message.includes('Failed to fetch')) {
@@ -702,7 +715,7 @@ window.fetchFromAniList = window.fetchFromAniList || fetchFromAniList;
 // Enhanced initializeAnimeData with parallel loading and fallbacks
 async function initializeAnimeData() {
   // Prevent home refresh when watchlist is active
-  if ((window.AppStore?.getState().view.currentView) === 'watchlist') return;
+  if (window.currentView === 'watchlist') return;
   
   try {
     // Show loading state in UI
@@ -834,6 +847,21 @@ function getCurrentSeason() {
   if (month >= 6 && month <= 8) return 'SUMMER';
   if (month >= 9 && month <= 11) return 'FALL';
   return 'WINTER';
+}
+
+// New: verify if anime has aired using AniList status
+async function isAnimeAired(animeId) {
+  try {
+    const q = `
+      query ($id:Int){ Media(id:$id,type:ANIME){ status episodes nextAiringEpisode{episode airingAt} } }
+    `;
+    const d = await fetchFromAniList(q, { id: parseInt(animeId, 10) });
+    const m = d?.Media;
+    if (!m) return true;
+    if (m.status === 'NOT_YET_RELEASED') return false;
+    if ((m.episodes || 0) > 0) return true;
+    return m.status === 'RELEASING' || m.status === 'FINISHED';
+  } catch { return true; }
 }
 
 // Enhanced daily update card creation
@@ -1315,31 +1343,39 @@ window.showAnimeDetails = async function(anime) {
         </div>
       `;
 
-      // Add tab switching functionality
+      // Add tab switching functionality with cleanup
       const tabBtns = modal.querySelectorAll('.info-tabs .tab-btn');
       const tabContents = modal.querySelectorAll('.tab-content');
-
+      const tabHandlers = [];
       tabBtns.forEach(btn => {
-        btn.addEventListener('click', () => {
+        const handler = () => {
           try {
             tabBtns.forEach(b => b.classList.remove('active'));
             tabContents.forEach(c => c.classList.remove('active'));
             btn.classList.add('active');
             modal.querySelector(`.tab-content.${btn.dataset.tab}`).classList.add('active');
-          } catch(err) {
-            console.error('Tab switch error:', err);
-          }
-        });
+          } catch(err) { console.error('Tab switch error:', err); }
+        };
+        btn.addEventListener('click', handler);
+        tabHandlers.push({ btn, handler });
       });
 
-      // Add click handlers for close button
+      // Close handlers (with teardown)
       const closeBtn = modal.querySelector('.close-anime-details');
+      const doCleanupAndClose = () => {
+        tabHandlers.forEach(({ btn, handler }) => btn.removeEventListener('click', handler));
+        if (closeBtn) closeBtn.removeEventListener('click', doCleanupAndClose);
+        modal.removeEventListener('click', outsideHandler);
+        modal.classList.remove('show');
+        setTimeout(() => modal.remove(), 300);
+      };
       if (closeBtn) {
-        closeBtn.addEventListener('click', () => {
-          modal.classList.remove('show');
-          setTimeout(() => modal.remove(), 300);
-        });
+        closeBtn.addEventListener('click', doCleanupAndClose);
       }
+      const outsideHandler = (e) => {
+        if (e.target === modal) doCleanupAndClose();
+      };
+      modal.addEventListener('click', outsideHandler);
 
       // Check watchlist status after modal is created
       try {
@@ -1378,7 +1414,7 @@ window.showAnimeDetails = async function(anime) {
             <img src="${anime.image || 'https://via.placeholder.com/300x450?text=No+Image'}" 
                 alt="${anime.title || 'Anime'}" 
                 class="anime-cover"
-                onerror="this.onerror=null; this.src='https://via.placeholder.com/300x450?text=No+Image';">
+                onerror="this.onerror=null; this.src='https://via.placeholder.com/300x400?text=No+Image';">
             <div class="anime-info">
               <h2>${anime.title || 'Unknown Anime'}</h2>
               <div class="anime-meta">
@@ -1442,105 +1478,83 @@ window.showAnimeDetails = async function(anime) {
 
 // Enhanced video player initialization 
 async function initializeVideoPlayer(anime, episodeNumber = 1) {
-  if (!anime || !anime.id) {
-    console.error('Invalid anime data provided to video player');
-    return;
-  }
-
+  if (!anime || !anime.id) { console.error('Invalid anime data provided to video player'); return; }
   console.log('Initializing player for:', anime.title, 'Episode:', episodeNumber);
-  
+
   try {
     const videoPlayerModal = document.getElementById('videoPlayerModal');
     const videoTitle = document.querySelector('.video-title');
     const episodeList = document.getElementById('episodeList');
     const animeInfoCard = document.querySelector('.anime-info-card');
-
-    // Close any open anime details modal first
-    document.querySelectorAll('.anime-details-modal').forEach(modal => {
-      modal.classList.remove('show');
-      setTimeout(() => modal.remove(), 100);
-    });
-
-    // Show video player modal
     if (videoPlayerModal) videoPlayerModal.classList.add('show');
     if (videoTitle) videoTitle.textContent = `${anime.title} - Episode ${episodeNumber}`;
 
-    // Initialize video container with message
-    const videoContainer = document.querySelector('.video-container');
-    if (videoContainer) {
-      videoContainer.innerHTML = `
-        <div class="error-state">
-          <i class="fas fa-film"></i>
-          <h3>Coming Soon</h3>
-          <p>Video playback functionality will be available soon!</p>
-        </div>
-      `;
-    }
+    const container = document.querySelector('.video-container');
+    if (container) {
+      container.innerHTML = '';
+      const video = document.createElement('video');
+      video.style.width = '100%';
+      video.style.height = '100%';
+      video.controls = true;
+      video.playsInline = true; video.setAttribute('playsinline', 'true'); video.muted = true; video.autoplay = true; video.crossOrigin = 'anonymous';
+      video.poster = anime.image || '';
+      container.appendChild(video);
 
-    // Get detailed anime info if not already available
-    let animeDetails = null;
-    if (cache.detailedAnime && cache.detailedAnime.has(anime.id)) {
-      animeDetails = cache.detailedAnime.get(anime.id).Media;
-    } else {
-      try {
-        const detailedData = await fetchFromAniList(DETAILED_ANIME_QUERY, { id: anime.id });
-        if (detailedData?.Media) {
-          animeDetails = detailedData.Media;
-          cache.detailedAnime.set(anime.id, { Media: animeDetails });
-        }
-      } catch (error) {
-        console.error('Error fetching anime details:', error);
+      // Block not-yet-aired seasons to avoid mismatched streams
+      const aired = await isAnimeAired(anime.id);
+      if (!aired) {
+        container.innerHTML = `
+          <div class="error-state">
+            <i class="fas fa-clock"></i>
+            <p>${anime.title} has not aired yet.</p>
+            <p>Please check back later.</p>
+            <button class="retry-btn" onclick="document.getElementById('videoPlayerModal').classList.remove('show')">
+              <i class="fas fa-times"></i> Close
+            </button>
+          </div>
+        `;
+        return;
       }
+
+      const animeId = await fetchBackendAnimeId(anime.title);
+      if (!animeId) {
+        container.innerHTML = `<div class="error-state"><i class="fas fa-exclamation-circle"></i><p>No stream available</p></div>`;
+        return;
+      }
+
+      const episodes = await fetchBackendEpisodes(animeId);
+      if (!episodes.length) {
+        container.innerHTML = `<div class="error-state"><i class="fas fa-exclamation-circle"></i><p>No episodes found</p></div>`;
+        return;
+      }
+
+      const pickEpisode = (ep) => {
+        document.querySelectorAll('.episode-item').forEach(el => el.classList.remove('active'));
+        const item = Array.from(episodeList.children).find(c => c.querySelector('.episode-number')?.textContent?.includes(` ${ep.number}`));
+        if (item) item.classList.add('active');
+        if (videoTitle) videoTitle.textContent = `${anime.title} - Episode ${ep.number}`;
+        setupServersUI(ep.episodeId, video);
+      };
+
+      // Build list and autoplay selected
+      const targetEp = episodes.find(e => Number(e.number) === Number(episodeNumber)) || episodes[0];
+      buildEpisodeList(episodes, Number(targetEp.number), pickEpisode);
+      pickEpisode(targetEp);
     }
 
-    // Populate anime info card
+    // Populate info card (preserve existing behavior)
     if (animeInfoCard) {
-      if (animeDetails) {
-        animeInfoCard.innerHTML = `
-          <img src="${animeDetails.coverImage.large}" alt="${anime.title}">
-          <h3>${anime.title}</h3>
-          <div class="meta">
-            <span>${animeDetails.episodes || '?'} Episodes</span>
-            <span>⭐ ${animeDetails.averageScore / 10}</span>
-          </div>
-          <button class="add-list-btn" data-anime-id="${anime.id}" onclick="addToWatchlist('${anime.id}')" 
-                  style="width: 100%; margin-top: 10px; padding: 8px; border-radius: 4px;">
-            <i class="fas fa-plus"></i> Add to List
-          </button>
-        `;
-        animeInfoCard.dataset.animeId = anime.id;
-        
-        // Check watchlist status
-        checkWatchlistStatus(anime.id);
-      } else {
-        animeInfoCard.innerHTML = `
-          <img src="${anime.image}" alt="${anime.title}">
-          <h3>${anime.title}</h3>
-          <div class="meta">
-            <span>${anime.episodes || '?'} Episodes</span>
-            <span>⭐ ${anime.rating}</span>
-          </div>
-          <button class="add-list-btn" data-anime-id="${anime.id}" onclick="addToWatchlist('${anime.id}')"
-                  style="width: 100%; margin-top: 10px; padding: 8px; border-radius: 4px;">
-            <i class="fas fa-plus"></i> Add to List
-          </button>
-        `;
-        animeInfoCard.dataset.animeId = anime.id;
-        
-        // Check watchlist status
-        checkWatchlistStatus(anime.id);
-      }
-    }
-
-    // Create episode list with thumbnails and descriptions
-    if (episodeList) {
-      episodeList.innerHTML = `
-        <div class="loading-message" style="position:static;color:var(--text-secondary);padding:0.75rem;">
-          <i class="fas fa-list" style="margin-right:8px;"></i> Episodes list coming soon
-        </div>
+      animeInfoCard.innerHTML = `
+        <img src="${anime.image}" alt="${anime.title}">
+        <h3>${anime.title}</h3>
+        <div class="meta"><span>${anime.episodes || '?'} Episodes</span><span>⭐ ${anime.rating || 0}</span></div>
+        <button class="add-list-btn" data-anime-id="${anime.id}" onclick="addToWatchlist('${anime.id}')" style="width:100%;margin-top:10px;padding:8px;border-radius:4px;">
+          <i class="fas fa-plus"></i> Add to List
+        </button>
       `;
+      animeInfoCard.dataset.animeId = anime.id;
+      checkWatchlistStatus(anime.id);
     }
-
   } catch (error) {
     console.error('Player initialization error:', error);
     const videoContainer = document.querySelector('.video-container');
@@ -1631,7 +1645,7 @@ async function filterAnimeByCategory(category) {
   // Normalize input (small fix)
   const normalizedCategory = category.toLowerCase().replace(/\s+/g, '');
   // Update current view (avoid 'watchlist' since this is category-based)
-  window.AppStore?.setCurrentView(normalizedCategory === 'home' ? 'home' : normalizedCategory);
+  window.currentView = normalizedCategory === 'home' ? 'home' : normalizedCategory;
 
   // Update nav links active state
   const navLinks = document.querySelectorAll('.nav-links a');
@@ -1777,8 +1791,8 @@ async function filterAnimeByCategory(category) {
         if (animeId) {
           const animeData = {
             id: animeId,
-            title: card.querySelector('h3').textContent,
-            image: card.querySelector('img').src,
+            title: card.querySelector('h3')?.textContent || 'Unknown Anime',
+            image: card.querySelector('img')?.src || '',
             episodes: card.querySelector('.meta span:first-child')?.textContent.split(' ')[0] || '12',
             rating: parseFloat(card.querySelector('.meta span:last-child')?.textContent.replace('⭐ ', '') || '0')
           };
@@ -1810,8 +1824,8 @@ function renderAnimeGrid(headingElement, gridElement, cachedHtml, headingText) {
         if (animeId) {
           const animeData = {
             id: animeId,
-            title: card.querySelector('h3').textContent,
-            image: card.querySelector('img').src,
+            title: card.querySelector('h3')?.textContent || 'Unknown Anime',
+            image: card.querySelector('img')?.src || '',
             episodes: card.querySelector('.meta span:first-child')?.textContent.split(' ')[0] || '12',
             rating: parseFloat(card.querySelector('.meta span:last-child')?.textContent.replace('⭐ ', '') || '0')
           };
@@ -1838,27 +1852,12 @@ document.getElementById('search').addEventListener('keypress', (e) => {
     const event = new Event('input');
     document.getElementById('search').dispatchEvent(event);
     document.getElementById('search').blur(); // Remove focus from search input
-    const dr = ensureSearchDropdown(); if (dr) dr.style.display = 'none';
   }
 });
-
-// Helper to ensure the search dropdown exists before first use
-function ensureSearchDropdown() {
-  if (window.searchResultsDropdown && document.body.contains(window.searchResultsDropdown)) return window.searchResultsDropdown;
-  const bar = document.querySelector('.search-bar');
-  if (!bar) return null;
-  const el = document.createElement('div');
-  el.className = 'search-results-dropdown';
-  el.style.display = 'none';
-  bar.appendChild(el);
-  window.searchResultsDropdown = el;
-  return el;
-}
 
 // Update the nav links click handlers in the DOMContentLoaded event
 document.addEventListener('DOMContentLoaded', () => {
   initializeAnimeData();
-  loadSeasonalAnime();
   
   // Refresh data periodically
   setInterval(() => {
@@ -1921,57 +1920,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
     console.log('App auth state changed:', event, user?.id);
 
+    // Delegate profile UI updates to auth.js to avoid race conditions
+    try { await (window.refreshUserProfile?.() || Promise.resolve()); } catch(e){ console.warn('refreshUserProfile failed', e); }
+
     if (user) {
-      // User is signed in
       if (authButton) authButton.style.display = 'none';
       if (profileDropdown) profileDropdown.style.display = 'inline-block';
-      
-      // Get profile data from Supabase with retry mechanism
-      let profileData = null;
-      let retryCount = 0;
-      const maxRetries = 3;
-      
-      while (retryCount < maxRetries && !profileData) {
-        try {
-          profileData = await window.loadUserProfile(user.id);
-          if (profileData) break;
-        } catch (error) {
-          console.warn(`Profile load attempt ${retryCount + 1} failed:`, error);
-        }
-        retryCount++;
-        if (retryCount < maxRetries) {
-          await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
-        }
-      }
-      
-      // Update username display
-      const displayName = profileData?.username || user.user_metadata?.username || user.email.split('@')[0];
-      document.querySelectorAll('.user-display-name').forEach(el => {
-        if (el) el.textContent = displayName;
-      });
-
-      // Update user email
-      const userEmailEl = document.getElementById('userEmail');
-      if (userEmailEl) userEmailEl.textContent = user.email;
-
-      // Update avatar everywhere
-      const providerAvatar = user?.user_metadata?.avatar_url || user?.user_metadata?.picture || (user?.identities || []).find(i => i.provider === 'google')?.identity_data?.picture || null;
-      const avatarUrl = profileData?.avatar_url || providerAvatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${user.id}`;
-      document.querySelectorAll('.profile-icon, .user-avatar, #avatarPreview').forEach(el => {
-        if (el) {
-          el.src = avatarUrl;
-          el.onerror = function() {
-            this.onerror = null;
-            this.src = `https://api.dicebear.com/7.x/avataaars/svg?seed=${user.id}`;
-          };
-        }
-      });
-
       // Enable chat
       if (chatInput) chatInput.disabled = false;
       if (sendMessage) sendMessage.disabled = false;
       if (chatLoginPrompt) chatLoginPrompt.classList.remove('visible');
-
       // Hide auth modal if open
       const authModal = document.getElementById('authModal');
       if (authModal) {
@@ -1979,11 +1937,8 @@ document.addEventListener('DOMContentLoaded', () => {
         setTimeout(() => { authModal.style.display = 'none'; }, 300);
       }
     } else {
-      // User is signed out
       if (authButton) authButton.style.display = 'inline-block';
       if (profileDropdown) profileDropdown.style.display = 'none';
-      
-      // Disable chat
       if (chatInput) chatInput.disabled = true;
       if (sendMessage) sendMessage.disabled = true;
       if (chatLoginPrompt) chatLoginPrompt.classList.add('visible');
@@ -2629,7 +2584,7 @@ async function loadSeasonalAnime() {
 
 // Function to return to home page
 function returnToHome() {
-  window.AppStore?.setCurrentView('home');
+  window.currentView = 'home';
   filterAnimeByCategory('Home');
 }
 
@@ -2711,7 +2666,7 @@ document.getElementById('search').addEventListener('input', debounce(async funct
     if (trendingHeading) trendingHeading.textContent = '🔥 Trending Now';
     if (recentHeading) recentHeading.textContent = '📺 Recently Updated';
     initializeAnimeData();
-    const dr = ensureSearchDropdown(); if (dr) dr.style.display = 'none';
+    searchResultsDropdown.style.display = 'none';
     return;
   }
 
@@ -2918,11 +2873,15 @@ document.getElementById('search').addEventListener('input', debounce(async funct
 
 // Add Enter key handler for search
 document.getElementById('search').addEventListener('keypress', (e) => {
-  if (e.key === 'Enter' && document.getElementById('search').value.trim().length > 0) {
-    const event = new Event('input');
-    document.getElementById('search').dispatchEvent(event);
-    document.getElementById('search').blur();
-    const dr = ensureSearchDropdown(); if (dr) dr.style.display = 'none';
+  if (e.key === 'Enter') {
+    const searchTerm = e.target.value.trim();
+    if (searchTerm.length > 0) {
+      e.target.blur(); // Remove focus from search input
+      searchResultsDropdown.style.display = 'none'; // Hide dropdown
+      // Trigger search
+      const event = new Event('input');
+      e.target.dispatchEvent(event);
+    }
   }
 });
 
@@ -3031,7 +2990,7 @@ function updateWatchlistButtons(animeId, isInWatchlist) {
 // Show watchlist function
 function showWatchlist() {
   // Lock view to watchlist so home refresh doesn't override
-  window.AppStore?.setCurrentView('watchlist');
+  window.currentView = 'watchlist';
   
   window.supabase.auth.getSession().then(async ({ data: { session } }) => {
     const user = session?.user;
@@ -3278,7 +3237,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
 // Create and inject search results dropdown container
 const searchBar = document.querySelector('.search-bar');
-const searchResultsDropdown = ensureSearchDropdown();
+const searchResultsDropdown = document.createElement('div');
+searchResultsDropdown.className = 'search-results-dropdown';
+searchResultsDropdown.style.display = 'none';
+searchBar.appendChild(searchResultsDropdown);
 
 // Add styles for the search results dropdown
 const searchStyles = document.createElement('style');
@@ -4088,3 +4050,212 @@ function initializePWA() {
 
 // Initialize performance monitoring
 initializePerformanceMonitoring();
+
+// New functions to load movies and TV series
+async function loadHls() {
+  if (window.Hls) return window.Hls;
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = 'https://cdn.jsdelivr.net/npm/hls.js@1.5.8/dist/hls.min.js';
+    s.onload = () => resolve(window.Hls);
+    s.onerror = reject;
+    document.head.appendChild(s);
+  });
+}
+
+async function fetchBackendAnimeId(title) {
+  const res = await fetch(`${STREAM_BASE_URL}/api/search?q=${encodeURIComponent(title)}&_=${Date.now()}`, { cache: 'no-store' });
+  const data = await res.json().catch(() => ({}));
+  const list = data?.results?.data?.animes || [];
+  const exact = list.find(a => a?.name?.toLowerCase() === title.toLowerCase());
+  return (exact || list[0] || {}).id || null;
+}
+
+async function fetchBackendEpisodes(animeId) {
+  const res = await fetch(`${STREAM_BASE_URL}/api/anime/${animeId}/episodes?_=${Date.now()}`, { cache: 'no-store' });
+  const data = await res.json().catch(() => ({}));
+  return data?.episodes?.data?.episodes || [];
+}
+
+async function fetchEpisodeServers(episodeId) {
+  const res = await fetch(`${STREAM_BASE_URL}/api/episode/servers?animeEpisodeId=${encodeURIComponent(episodeId)}&_=${Date.now()}`, { cache: 'no-store' });
+  const data = await res.json().catch(() => ({}));
+  return data?.servers?.data || null;
+}
+
+async function setupServersUI(episodeId, videoEl) {
+  const section = document.getElementById('serverSection');
+  const servers = await fetchEpisodeServers(episodeId);
+  const subList = servers?.sub || [];
+  const dubList = servers?.dub || [];
+  let category = subList.length ? 'sub' : (dubList.length ? 'dub' : 'sub');
+  let serverName = (category === 'sub' ? subList[0]?.serverName : dubList[0]?.serverName) || '';
+  renderServerControls(section, { subList, dubList, category, serverName, onChange: async (cat, name) => {
+    category = cat; serverName = name; await playSelected(episodeId, videoEl, category, serverName);
+  }});
+  await playSelected(episodeId, videoEl, category, serverName);
+}
+
+function renderServerControls(container, { subList, dubList, category, serverName, onChange }) {
+  if (!container) return;
+  const makeChips = (list, cat) => list.map(s => `
+    <div class="server-chip ${cat === category && s.serverName === serverName ? 'active' : ''}" data-cat="${cat}" data-name="${s.serverName}">
+      <span>${s.serverName.toUpperCase()}</span>
+      <span style="opacity:.7;font-size:.85rem">#${s.serverId}</span>
+    </div>`).join('');
+  container.innerHTML = `
+    <div class="server-section">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
+        <div class="segmented">
+          ${subList.length ? `<button class="seg-btn ${category==='sub'?'active':''}" data-val="sub">Sub</button>` : ''}
+          ${dubList.length ? `<button class="seg-btn ${category==='dub'?'active':''}" data-val="dub">Dub</button>` : ''}
+        </div>
+        <div style="color:var(--text-secondary);font-size:.9rem;">Choose a server</div>
+      </div>
+      <div class="server-grid">
+        ${category === 'sub' ? makeChips(subList, 'sub') : makeChips(dubList, 'dub')}
+      </div>
+    </div>`;
+  container.querySelectorAll('.seg-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const newCat = btn.dataset.val;
+      const nextName = (newCat === 'sub' ? subList[0]?.serverName : dubList[0]?.serverName) || '';
+      renderServerControls(container, { subList, dubList, category: newCat, serverName: nextName, onChange });
+      onChange(newCat, nextName);
+    });
+  });
+  container.querySelectorAll('.server-chip').forEach(chip => {
+    chip.addEventListener('click', () => {
+      const newCat = chip.dataset.cat;
+      const newName = chip.dataset.name;
+      renderServerControls(container, { subList, dubList, category: newCat, serverName: newName, onChange });
+      onChange(newCat, newName);
+    });
+  });
+}
+
+async function playSelected(episodeId, videoEl, category, serverName) {
+  try {
+    const res = await getM3U8FromSelection(episodeId, category, serverName);
+    if (!res?.url) {
+      const servers = await fetchEpisodeServers(episodeId);
+      const list = (category === 'sub' ? servers?.sub : servers?.dub) || [];
+      for (const s of list) {
+        if (s.serverName === serverName) continue;
+        const alt = await getM3U8FromSelection(episodeId, category, s.serverName);
+        if (alt?.url) { showToast(`Switched to ${s.serverName.toUpperCase()}`, 'info'); attachHlsToVideo(videoEl, alt.url); if (category==='sub' && Array.isArray(alt.subtitles)) applySubtitles(videoEl, alt.subtitles); return; }
+      }
+      showToast('No stream available for this selection', 'error'); return;
+    }
+    attachHlsToVideo(videoEl, res.url);
+    if (category === 'sub' && Array.isArray(res.subtitles)) applySubtitles(videoEl, res.subtitles);
+  } catch (e) {
+    console.error(e);
+    showToast('Failed to load stream', 'error');
+  }
+}
+
+async function getM3U8FromSelection(episodeId, category, serverName) {
+  const res = await fetch(`${STREAM_BASE_URL}/api/episode/sources?animeEpisodeId=${encodeURIComponent(episodeId)}&server=${encodeURIComponent(serverName)}&category=${category}&_=${Date.now()}`, { cache: 'no-store' });
+  const data = await res.json().catch(() => ({}));
+  // replace simple extraction with robust detection
+  const raw = data?.sources?.data?.sources ?? data?.sources?.sources ?? data?.sources ?? [];
+  let url = '';
+  if (typeof raw === 'string') url = raw;
+  else if (Array.isArray(raw)) {
+    const pick = raw.find(s => s.isM3U8 || s.type === 'hls' || /m3u8/i.test(s?.type || '') || /\.m3u8($|\?)/i.test(s?.url || s?.file || '')) || raw[0];
+    url = pick?.url || pick?.file || '';
+  } else if (raw && typeof raw === 'object') {
+    const cand = raw.m3u8 || raw.playlist || raw.url || raw.file || Object.values(raw).find(v => typeof v === 'string' && /\.m3u8($|\?)/i.test(v)) || '';
+    url = typeof cand === 'string' ? cand : '';
+  }
+  const tracksRaw = data?.sources?.data?.subtitles || data?.sources?.data?.tracks || data?.tracks || [];
+  const subtitles = (Array.isArray(tracksRaw) ? tracksRaw : []).map(t => ({
+    src: t.file || t.url || t.src,
+    label: t.label || t.lang || 'Sub',
+    srclang: (t.lang || t.srclang || '').toLowerCase() || 'en',
+    default: t.default === true || /eng|english/i.test(t.label || '')
+  })).filter(t => !!t.src);
+  return { url, subtitles };
+}
+
+function applySubtitles(videoEl, subtitles) {
+  try {
+    videoEl.querySelectorAll('track').forEach(tr => tr.remove());
+    subtitles.forEach((s, i) => {
+      const tr = document.createElement('track');
+      tr.kind = 'subtitles'; tr.label = s.label || `Sub ${i+1}`;
+      tr.srclang = s.srclang || 'en'; tr.src = s.src; if (s.default && !videoEl.querySelector('track[default]')) tr.default = true;
+      videoEl.appendChild(tr);
+    });
+  } catch (_) {}
+}
+
+function attachHlsToVideo(videoEl, m3u8Url) {
+  if (!m3u8Url) throw new Error('No stream URL');
+  window.currentVideoEl = videoEl;
+  if (videoEl.canPlayType('application/vnd.apple.mpegurl')) {
+    videoEl.src = m3u8Url;
+    videoEl.load();
+    const tryPlay = () => videoEl.play().catch(() => showTapToPlay(videoEl));
+    videoEl.addEventListener('loadedmetadata', tryPlay, { once: true });
+    tryPlay();
+    return;
+  }
+  loadHls().then(Hls => {
+    const hls = new Hls({ maxBufferLength: 30, enableWorker: true });
+    window.currentHls = hls;
+    hls.loadSource(m3u8Url);
+    hls.attachMedia(videoEl);
+    hls.on(Hls.Events.MANIFEST_PARSED, () => {
+      videoEl.play().catch(() => showTapToPlay(videoEl));
+    });
+  }).catch(err => {
+    console.error('HLS load error:', err);
+    showToast('Failed to load player', 'error');
+  });
+}
+
+function showTapToPlay(videoEl) {
+  const container = videoEl.parentElement;
+  if (!container || container.querySelector('.tap-to-play')) return;
+  const overlay = document.createElement('button');
+  overlay.className = 'tap-to-play';
+  overlay.textContent = 'Tap to Play';
+  overlay.style.cssText = 'position:absolute;inset:0;margin:auto;height:56px;min-width:160px;background:var(--primary-color);color:#fff;border:none;border-radius:8px;cursor:pointer;z-index:5';
+  overlay.addEventListener('click', async () => {
+    try { await videoEl.play(); overlay.remove(); } catch (_) {}
+  });
+  container.appendChild(overlay);
+}
+
+function buildEpisodeList(episodes, activeNumber, onSelect) {
+  const list = document.getElementById('episodeList');
+  if (!list) return;
+  list.innerHTML = '';
+  episodes.forEach(ep => {
+    const div = document.createElement('div');
+    div.className = 'episode-item' + (ep.number === activeNumber ? ' active' : '');
+    div.innerHTML = `
+      <div class="episode-thumbnail"><img src="${ep.image || 'https://via.placeholder.com/120x70?text=EP'}" alt="Ep ${ep.number}"></div>
+      <div class="episode-info">
+        <div class="episode-number">Episode ${ep.number}</div>
+        <div class="episode-description">${(ep.title || '').slice(0, 60)}</div>
+      </div>
+    `;
+    div.addEventListener('click', () => onSelect(ep));
+    list.appendChild(div);
+  });
+}
+
+window.stopCurrentPlayback = function() {
+  try {
+    if (window.currentHls) { window.currentHls.destroy(); window.currentHls = null; }
+    if (window.currentVideoEl) {
+      window.currentVideoEl.pause();
+      window.currentVideoEl.removeAttribute('src');
+      window.currentVideoEl.load();
+      window.currentVideoEl = null;
+    }
+  } catch(e) { console.warn('Playback cleanup error:', e); }
+};

@@ -3458,3 +3458,55 @@ input:checked + .toggle-slider:before {
     display: none;
   }
 }
+
+.server-section {
+  border-top: 1px solid var(--border-color);
+  padding: 1rem 1.5rem;
+}
+
+.segmented {
+  display: inline-flex;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  padding: 4px;
+  gap: 4px;
+}
+
+.seg-btn {
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  padding: 8px 14px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 600;
+}
+.seg-btn.active {
+  background: var(--primary-color);
+  color: #fff;
+}
+
+.server-grid {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+  gap: 8px;
+}
+.server-chip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  padding: 10px 12px;
+  cursor: pointer;
+  color: var(--text-color);
+  transition: transform .15s ease, border-color .2s ease, background .2s ease;
+}
+.server-chip:hover { transform: translateY(-1px); }
+.server-chip.active {
+  background: rgba(var(--primary-color-rgb), 0.15);
+  border-color: var(--primary-color);
+}

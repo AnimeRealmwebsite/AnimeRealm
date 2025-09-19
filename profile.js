@@ -12,6 +12,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const bioInput = document.getElementById('bioInput');
   const cancelProfileBtn = document.querySelector('.cancel-profile-btn');
   let originalAvatar = null;
+  let profileOutsideHandler = null;
 
   // Listen for profile loaded events
   window.addEventListener('profileLoaded', async (event) => {
@@ -34,6 +35,10 @@ document.addEventListener('DOMContentLoaded', () => {
         }
       });
     }
+    if (!profileOutsideHandler) {
+      profileOutsideHandler = (e) => { if (e.target === profileModal) hideProfileModal(); };
+      profileModal.addEventListener('click', profileOutsideHandler);
+    }
   }
 
   function hideProfileModal() {
@@ -43,13 +48,17 @@ document.addEventListener('DOMContentLoaded', () => {
         if (el) el.src = originalAvatar;
       });
     }
-    
+
     // Clear temporary avatar and original avatar reference
     window.tempGeneratedAvatar = null;
     originalAvatar = null;
-    
+
     // Hide modal
     profileModal.classList.remove('show');
+    if (profileOutsideHandler) {
+      profileModal.removeEventListener('click', profileOutsideHandler);
+      profileOutsideHandler = null;
+    }
   }
 
   // Event listeners for modal
@@ -79,20 +88,14 @@ document.addEventListener('DOMContentLoaded', () => {
           if (el) el.src = originalAvatar;
         });
       }
-      
+
       // Clear temporary avatar
       window.tempGeneratedAvatar = null;
-      
+
       // Close modal
       hideProfileModal();
     });
   }
-
-  profileModal.addEventListener('click', (e) => {
-    if (e.target === profileModal) {
-      hideProfileModal();
-    }
-  });
 
   // Add rate limiting functionality for avatar generation
   function checkGenerationLimit() {
@@ -160,9 +163,15 @@ document.addEventListener('DOMContentLoaded', () => {
           query: query
         })
       });
-
-      const data = await response.json();
-      return data.data.Page.characters.nodes[0];
+      if (!response.ok) {
+        const t = await response.text().catch(() => '');
+        throw new Error(`AniList character HTTP ${response.status} ${response.statusText} ${t.slice(0,120)}`);
+      }
+      const txt = await response.text();
+      let data;
+      try { data = JSON.parse(txt); } 
+      catch (e) { throw new Error(`AniList character JSON parse failed: ${e.message}`); }
+      return data.data?.Page?.characters?.nodes?.[0] || null;
     } catch (error) {
       console.error('Error fetching anime character:', error);
       return null;
@@ -173,7 +182,7 @@ document.addEventListener('DOMContentLoaded', () => {
   async function generateNewAvatar() {
     const user = window.getCurrentUser();
     if (!user) return;
-    
+
     const selectedGender = genderSelect.value;
     if (!selectedGender) {
       showToast('Please select a gender before generating an avatar', 'warning');
@@ -190,11 +199,11 @@ document.addEventListener('DOMContentLoaded', () => {
       // Use high-quality anime character API based on gender
       let avatarUrl;
       const seed = Math.random().toString(36).substring(7);
-      
+
       if (selectedGender === 'male') {
         // Use ThisPersonDoesNotExist anime style for males
         avatarUrl = `https://api.waifu.pics/sfw/waifu`;
-        
+
         // Fallback to anime boy API if available
         try {
           const response = await fetch('https://api.jikan.moe/v4/characters', {
@@ -203,17 +212,20 @@ document.addEventListener('DOMContentLoaded', () => {
               'Accept': 'application/json'
             }
           });
-          
-          if (response.ok) {
-            const data = await response.json();
-            const maleCharacters = data.data?.filter(char => 
-              char.name && char.images?.jpg?.image_url
-            );
-            
-            if (maleCharacters && maleCharacters.length > 0) {
-              const randomChar = maleCharacters[Math.floor(Math.random() * maleCharacters.length)];
-              avatarUrl = randomChar.images.jpg.image_url;
-            }
+          if (!response.ok) {
+            const t = await response.text().catch(() => '');
+            throw new Error(`Jikan HTTP ${response.status} ${response.statusText} ${t.slice(0,120)}`);
+          }
+          const txt = await response.text();
+          let data;
+          try { data = JSON.parse(txt); } catch (e) { throw new Error(`Jikan JSON parse failed: ${e.message}`); }
+          const maleCharacters = data.data?.filter(char =>
+            char.name && char.images?.jpg?.image_url
+          );
+
+          if (maleCharacters && maleCharacters.length > 0) {
+            const randomChar = maleCharacters[Math.floor(Math.random() * maleCharacters.length)];
+            avatarUrl = randomChar.images.jpg.image_url;
           }
         } catch (apiError) {
           console.warn('Jikan API error, using fallback:', apiError);
@@ -223,15 +235,16 @@ document.addEventListener('DOMContentLoaded', () => {
         // Use waifu.pics API for high-quality anime girl images
         try {
           const response = await fetch('https://api.waifu.pics/sfw/waifu');
-          if (response.ok) {
-            const data = await response.json();
-            avatarUrl = data.url;
-          } else {
-            throw new Error('Waifu API failed');
+          if (!response.ok) {
+            const t = await response.text().catch(() => '');
+            throw new Error(`Waifu.pics HTTP ${response.status} ${response.statusText} ${t.slice(0,120)}`);
           }
+          const txt = await response.text();
+          let data;
+          try { data = JSON.parse(txt); } catch (e) { throw new Error(`Waifu.pics JSON parse failed: ${e.message}`); }
+          avatarUrl = data.url;
         } catch (apiError) {
           console.warn('Waifu API error, using fallback:', apiError);
-          // Fallback to anime character generator
           avatarUrl = `https://api.dicebear.com/7.x/anime/svg?seed=${seed}&gender=female`;
         }
       } else {
@@ -254,11 +267,11 @@ document.addEventListener('DOMContentLoaded', () => {
           female: ['anime_girl', 'waifu', 'manga_chan', 'otaku_girl'],
           other: ['anime_fan', 'manga_lover', 'otaku']
         };
-        
+
         const prefixes = genderPrefixes[selectedGender] || genderPrefixes.other;
         const randomPrefix = prefixes[Math.floor(Math.random() * prefixes.length)];
         const randomNumber = Math.floor(Math.random() * 9999);
-        
+
         usernameInput.value = `${randomPrefix}_${randomNumber}`;
       }
 
@@ -267,7 +280,7 @@ document.addEventListener('DOMContentLoaded', () => {
       // Enhanced fallback system
       const fallbackSeed = user.id + '-' + Date.now();
       let fallbackUrl;
-      
+
       if (selectedGender === 'male') {
         fallbackUrl = `https://api.dicebear.com/7.x/avataaars/svg?seed=${fallbackSeed}&gender=male`;
       } else if (selectedGender === 'female') {
@@ -275,12 +288,12 @@ document.addEventListener('DOMContentLoaded', () => {
       } else {
         fallbackUrl = `https://api.dicebear.com/7.x/avataaars/svg?seed=${fallbackSeed}`;
       }
-      
+
       if (avatarPreview) {
         avatarPreview.src = fallbackUrl;
         window.tempGeneratedAvatar = fallbackUrl;
       }
-      
+
       showToast('Using fallback avatar generator', 'warning');
     } finally {
       generateAvatarBtn.disabled = false;
@@ -319,13 +332,13 @@ document.addEventListener('DOMContentLoaded', () => {
       uploadAvatarBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
 
       const processedImage = await processImage(file, maxDimension);
-      
+
       const reader = new FileReader();
       reader.readAsDataURL(processedImage);
-      
+
       reader.onload = async () => {
         const base64Image = reader.result;
-        
+
         // Only update preview and store temporary value
         if (avatarPreview) {
           avatarPreview.src = base64Image;
@@ -336,7 +349,7 @@ document.addEventListener('DOMContentLoaded', () => {
     } catch (error) {
       console.error('Avatar upload error:', error);
       showToast('Failed to process image. Please try another image.', 'error');
-      
+
       // Revert to original avatar on error
       if (avatarPreview && originalAvatar) {
         avatarPreview.src = originalAvatar;
@@ -356,7 +369,7 @@ document.addEventListener('DOMContentLoaded', () => {
           // Calculate new dimensions while maintaining aspect ratio
           let width = img.width;
           let height = img.height;
-          
+
           if (width > maxDimension || height > maxDimension) {
             if (width > height) {
               height = (height / width) * maxDimension;
@@ -371,13 +384,13 @@ document.addEventListener('DOMContentLoaded', () => {
           const canvas = document.createElement('canvas');
           canvas.width = width;
           canvas.height = height;
-          
+
           // Draw and optimize image
           const ctx = canvas.getContext('2d');
           ctx.fillStyle = '#FFFFFF';
           ctx.fillRect(0, 0, width, height);
           ctx.drawImage(img, 0, 0, width, height);
-          
+
           // Convert to blob with quality optimization
           canvas.toBlob((blob) => {
             if (blob) {
@@ -386,12 +399,12 @@ document.addEventListener('DOMContentLoaded', () => {
               reject(new Error('Failed to process image'));
             }
           }, 'image/jpeg', 0.8);
-          
+
         } catch (error) {
           reject(error);
         }
       };
-      
+
       img.onerror = () => reject(new Error('Failed to load image'));
       img.src = URL.createObjectURL(file);
     });
@@ -416,7 +429,7 @@ document.addEventListener('DOMContentLoaded', () => {
       let profileData = null;
       let retryCount = 0;
       const maxRetries = 3;
-      
+
       while (retryCount < maxRetries && !profileData) {
         try {
           profileData = await window.loadUserProfile(currentUser.id);
@@ -429,7 +442,7 @@ document.addEventListener('DOMContentLoaded', () => {
           await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
         }
       }
-      
+
       // Update form fields safely with fallback values
       if (usernameInput) {
         usernameInput.value = profileData?.username || currentUser.user_metadata?.username || currentUser.email.split('@')[0];
@@ -444,14 +457,14 @@ document.addEventListener('DOMContentLoaded', () => {
       // Update avatar preview with fallback handling
       const avatarUrl = profileData?.avatar_url || currentUser.user_metadata?.avatar_url || `https://api.dicebear.com/7.x/avataaars/svg?seed=${currentUser.id}`;
       originalAvatar = avatarUrl;
-      
+
       if (avatarPreview) {
         avatarPreview.src = avatarUrl;
         avatarPreview.onerror = function() {
           this.onerror = null;
           this.src = `https://api.dicebear.com/7.x/avataaars/svg?seed=${currentUser.id}`;
         };
-        
+
         // Update all avatar instances
         document.querySelectorAll('.profile-icon, .user-avatar').forEach(el => {
           if (el) {
@@ -473,7 +486,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // Enhanced profile update handler with Supabase integration
   async function handleProfileUpdate(e) {
     e.preventDefault();
-    
+
     try {
       const user = window.getCurrentUser();
       if (!user) {
@@ -509,10 +522,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
       // Show loading state
       showLoadingOverlay('Saving your profile...');
-      
+
       // Use the temporary generated avatar if it exists, otherwise keep existing
       const newAvatarUrl = window.tempGeneratedAvatar || originalAvatar;
-      
+
       // Update profile in Supabase
       const updates = {
         username,
@@ -521,7 +534,7 @@ document.addEventListener('DOMContentLoaded', () => {
         avatar_url: newAvatarUrl,
         updated_at: new Date().toISOString()
       };
-      
+
       await window.updateUserProfile(user.id, updates);
 
       // Update all UI elements with the new data
@@ -538,11 +551,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
       const profileModal = document.getElementById('profileModal');
       if (profileModal) profileModal.classList.remove('show');
-      
+
       // Show success feedback
       showToast('Profile updated successfully!', 'success');
       showAutoSaveIndicator();
-      
+
     } catch (error) {
       console.error('Profile update error:', error);
       showToast('Failed to update profile. Please try again.', 'error');
@@ -571,7 +584,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Initialize auto-save when profile modal opens
   initializeAutoSave();
-  
+
   // Add periodic profile refresh for better reliability
   setInterval(async () => {
     const user = window.getCurrentUser();
@@ -583,7 +596,7 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     }
   }, 30000); // Refresh every 30 seconds if profile modal is open
-  
+
   // Initialize online users count functionality for Supabase chat
   function initializeOnlineUsersCount() {
     const onlineCountElement = document.getElementById('onlineCount');
@@ -602,7 +615,7 @@ document.addEventListener('DOMContentLoaded', () => {
       try {
         // Get users active in the last 5 minutes
         const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
-        
+
         const { data, error } = await window.supabase
           .from('online_users')
           .select('user_id')
@@ -623,7 +636,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const updatePresenceWithRetry = async () => {
       const user = window.getCurrentUser() || await window.getSupabaseUser();
       if (!user) return;
-      
+
       try {
         // Get profile data from Supabase with retry
         let profileData = null;
@@ -632,10 +645,10 @@ document.addEventListener('DOMContentLoaded', () => {
         } catch (error) {
           console.warn('Failed to load profile for presence update:', error);
         }
-        
+
         const username = profileData?.username || user.user_metadata?.username || user.email.split('@')[0];
         const avatarUrl = profileData?.avatar_url || `https://api.dicebear.com/7.x/avataaars/svg?seed=${user.id}`;
-        
+
         await window.supabase
           .from('online_users')
           .upsert({
@@ -661,7 +674,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Initial update
     updatePresence();
-    
+
     // Update every 30 seconds
     setInterval(updatePresence, 30000);
   }
@@ -673,7 +686,7 @@ document.addEventListener('DOMContentLoaded', () => {
 function initializeAutoSave() {
   const profileInputs = document.querySelectorAll('#profileForm input, #profileForm select, #profileForm textarea');
   let saveTimeout;
-  
+
   profileInputs.forEach(input => {
     input.addEventListener('input', () => {
       clearTimeout(saveTimeout);
@@ -687,7 +700,7 @@ function initializeAutoSave() {
             bio: document.getElementById('bioInput')?.value?.trim() || '',
             updated_at: new Date().toISOString()
           };
-          
+
           // Only save if there's actual content
           if (profileData.username || profileData.bio) {
             try {
